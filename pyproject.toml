@@ -54,6 +54,9 @@ Documentation = "https://github.com/yourusername/costplan/wiki"
 Repository = "https://github.com/yourusername/costplan"
 Issues = "https://github.com/yourusername/costplan/issues"
 
+[project.scripts]
+costplan = "costplan.cli.main:cli"
+
 [tool.hatch.build.targets.wheel]
 packages = ["costplan"]
 
