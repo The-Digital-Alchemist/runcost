@@ -134,7 +134,7 @@ def predict(ctx, prompt, file, model, output_ratio, list_models):
     table.add_row("Confidence", f"[{'green' if result.confidence_level == 'High' else 'yellow' if result.confidence_level == 'Medium' else 'red'}]{confidence_str}[/]")
 
     console.print("\n")
-    console.print(Panel(table, title="💰 Predicted Cost Range", border_style="blue"))
+    console.print(Panel(table, title="Predicted Cost Range", border_style="blue"))
     console.print("\n")
 
     # Show prompt preview if from file
