@@ -7,6 +7,14 @@ from costplan.core.calculator import CostCalculator, ActualCostResult
 from costplan.core.executor import ProviderExecutor, ExecutionResult
 from costplan.core.pricing import PricingRegistry
 from costplan.core.estimator import TokenEstimator
+from costplan.core.provider import BaseProvider, TokenPrediction
+from costplan.core.providers import OpenAIProvider
+from costplan.core.budget import (
+    BudgetPolicy,
+    BudgetSession,
+    BudgetExceededError,
+    BudgetedClient,
+)
 from costplan.storage.tracker import RunTracker
 from costplan.config.settings import Settings
 
@@ -19,6 +27,13 @@ __all__ = [
     "ExecutionResult",
     "PricingRegistry",
     "TokenEstimator",
+    "BaseProvider",
+    "TokenPrediction",
+    "OpenAIProvider",
+    "BudgetPolicy",
+    "BudgetSession",
+    "BudgetExceededError",
+    "BudgetedClient",
     "RunTracker",
     "Settings",
 ]

@@ -7,7 +7,7 @@ from sqlalchemy import func, and_
 
 from costplan.storage.database import DatabaseManager, Run, CalibrationMetadata
 from costplan.core.predictor import PredictionResult
-from costplan.core.calculator import ActualCostResult, CostCalculator
+from costplan.core.calculator import ActualCostResult, calculate_error_percent
 from costplan.config.settings import Settings
 
 
@@ -53,10 +53,9 @@ class RunTracker:
         # Calculate error if actual data is available
         error_percent = None
         if actual:
-            calculator = CostCalculator()
-            error_percent = calculator.calculate_error(
+            error_percent = calculate_error_percent(
                 prediction.predicted_total_cost,
-                actual.actual_total_cost
+                actual.actual_total_cost,
             )
 
         # Create run record

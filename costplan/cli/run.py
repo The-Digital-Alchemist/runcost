@@ -8,10 +8,10 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from costplan.core.calculator import CostCalculator
-from costplan.core.executor import ProviderExecutor
-from costplan.core.predictor import CostPredictor
+from costplan.core.calculator import calculate_error_percent
 from costplan.core.pricing import PricingNotFoundError
+from costplan.core.budget import BudgetPolicy, BudgetSession, BudgetedClient, BudgetExceededError
+from costplan.core.providers import OpenAIProvider
 from costplan.storage.tracker import RunTracker
 from costplan.utils.helpers import format_cost, format_percentage, format_tokens, read_prompt_from_file
 
@@ -61,9 +61,19 @@ console = Console()
     default=True,
     help="Show/hide LLM response (default: show)"
 )
+@click.option(
+    "--per-call",
+    type=float,
+    help="Max cost per call (dollars). Abort before running if predicted cost exceeds this."
+)
+@click.option(
+    "--per-session",
+    type=float,
+    help="Max total cost for this session (dollars). Abort if predicted cost would exceed remaining budget."
+)
 @click.pass_context
 def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
-        temperature, max_tokens, show_response):
+        temperature, max_tokens, show_response, per_call, per_session):
     """Execute a prompt and compare predicted vs actual cost.
 
     This command will:
@@ -115,14 +125,16 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
         click.echo("Try 'costplan run --help' for more information.")
         sys.exit(1)
 
-    # Initialize components
+    # Initialize provider and budgeted client (single path for all runs)
     try:
-        predictor = CostPredictor(settings=settings)
-        calculator = CostCalculator()
-        executor = ProviderExecutor(
+        provider = OpenAIProvider(
             api_key=api_key,
-            base_url=base_url or settings.get_base_url()
+            base_url=base_url or settings.get_base_url(),
+            settings=settings,
         )
+        policy = BudgetPolicy(per_call=per_call, per_session=per_session) if (per_call is not None or per_session is not None) else None
+        session = BudgetSession() if policy else None
+        client = BudgetedClient(provider, policy=policy, session=session)
         tracker = RunTracker(settings=settings)
     except Exception as e:
         click.echo(f"Error initializing components: {e}", err=True)
@@ -134,34 +146,37 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        # Step 1: Predict cost
         task1 = progress.add_task("🔮 Predicting cost...", total=None)
         try:
-            prediction = predictor.predict(prompt_text, model, output_ratio=output_ratio)
+            prediction, execution, actual = client.execute(
+                prompt_text, model,
+                output_ratio=output_ratio,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except BudgetExceededError as e:
+            progress.update(task1, completed=True)
+            console.print(f"[red]Budget exceeded: {e}[/red]")
+            sys.exit(1)
         except PricingNotFoundError as e:
+            progress.update(task1, completed=True)
             console.print(f"[red]Error: {e}[/red]")
             sys.exit(1)
         progress.update(task1, completed=True)
-
         console.print(f"   [green]Predicted: {format_cost(prediction.predicted_total_cost)}[/green]")
 
-        # Step 2: Execute request
         task2 = progress.add_task("⚡ Executing request...", total=None)
-        execution = executor.execute(prompt_text, model, temperature=temperature, max_tokens=max_tokens)
+        progress.update(task2, completed=True)
+        console.print("   [green]✓ Completed[/green]")
 
         if not execution.success:
             console.print(f"   [red]Error: {execution.error_message}[/red]")
             tracker.store_run(prediction, actual=None, model=model)
             sys.exit(1)
 
-        progress.update(task2, completed=True)
-        console.print("   [green]✓ Completed[/green]")
-
-    # Step 3: Calculate actual cost
-    actual = calculator.calculate(execution.usage, model)
-    error = calculator.calculate_error(
+    error = calculate_error_percent(
         prediction.predicted_total_cost,
-        actual.actual_total_cost
+        actual.actual_total_cost,
     )
 
     # Step 4: Store run data

@@ -129,8 +129,11 @@ class CostCalculator:
         Returns:
             Error percentage (positive = overestimated, negative = underestimated)
         """
-        if actual_cost == 0:
-            return 0.0
+        return calculate_error_percent(predicted_cost, actual_cost)
 
-        error = ((predicted_cost - actual_cost) / actual_cost) * 100
-        return error
+
+def calculate_error_percent(predicted_cost: float, actual_cost: float) -> float:
+    """Calculate prediction error percentage (positive = overestimated, negative = underestimated)."""
+    if actual_cost == 0:
+        return 0.0
+    return ((predicted_cost - actual_cost) / actual_cost) * 100
