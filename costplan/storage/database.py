@@ -144,7 +144,7 @@ class DatabaseManager:
         actual_output_tokens: Optional[int] = None,
         actual_cost: Optional[float] = None,
         error_percent: Optional[float] = None,
-    ) -> Run:
+    ) -> str:
         """Create a new run record.
 
         Args:
@@ -158,7 +158,7 @@ class DatabaseManager:
             error_percent: Error percentage (optional)
 
         Returns:
-            Created Run object
+            Created run ID (str)
         """
         with self.get_session() as session:
             run = Run(
@@ -174,7 +174,8 @@ class DatabaseManager:
             session.add(run)
             session.commit()
             session.refresh(run)
-            return run
+            run_id = run.id
+        return run_id
 
     def get_run_by_id(self, run_id: str) -> Optional[Run]:
         """Get a run by ID.

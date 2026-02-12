@@ -37,7 +37,7 @@ class RunTracker:
         prediction: PredictionResult,
         actual: Optional[ActualCostResult] = None,
         model: Optional[str] = None,
-    ) -> Run:
+    ) -> str:
         """Store a run record with prediction and actual data.
 
         Args:
@@ -46,7 +46,7 @@ class RunTracker:
             model: Model name (uses prediction.model if None)
 
         Returns:
-            Created Run object
+            Created run ID (str)
         """
         model_name = model or prediction.model
 
@@ -59,7 +59,7 @@ class RunTracker:
             )
 
         # Create run record
-        run = self.db_manager.create_run(
+        run_id = self.db_manager.create_run(
             model=model_name,
             predicted_input_tokens=prediction.predicted_input_tokens,
             predicted_output_tokens=prediction.predicted_output_tokens,
@@ -70,7 +70,7 @@ class RunTracker:
             error_percent=error_percent,
         )
 
-        return run
+        return run_id
 
     def get_recent_runs(
         self,

@@ -9,9 +9,9 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from costplan.core.calculator import calculate_error_percent
+from costplan.core.factory import create
 from costplan.core.pricing import PricingNotFoundError
 from costplan.core.budget import BudgetPolicy, BudgetSession, BudgetedClient, BudgetExceededError
-from costplan.core.providers import OpenAIProvider
 from costplan.storage.tracker import RunTracker
 from costplan.utils.helpers import format_cost, format_percentage, format_tokens, read_prompt_from_file
 
@@ -31,14 +31,18 @@ console = Console()
     help="Model name (default: gpt-3.5-turbo)"
 )
 @click.option(
+    "--provider", "-p",
+    default="openai",
+    help="Provider: openai or anthropic (default: openai)"
+)
+@click.option(
     "--api-key",
-    envvar="OPENAI_API_KEY",
-    help="API key (can also use OPENAI_API_KEY env var)"
+    help="API key override (otherwise from OPENAI_API_KEY or ANTHROPIC_API_KEY per provider)"
 )
 @click.option(
     "--base-url",
     envvar="OPENAI_BASE_URL",
-    help="API base URL for compatible providers"
+    help="API base URL (OpenAI-compatible providers only)"
 )
 @click.option(
     "--output-ratio", "-r",
@@ -72,7 +76,7 @@ console = Console()
     help="Max total cost for this session (dollars). Abort if predicted cost would exceed remaining budget."
 )
 @click.pass_context
-def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
+def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
         temperature, max_tokens, show_response, per_call, per_session):
     """Execute a prompt and compare predicted vs actual cost.
 
@@ -86,27 +90,33 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
     Examples:
 
         \b
-        # Run with environment variable API key
+        # Run with OpenAI (default)
         export OPENAI_API_KEY=your_key
         costplan run "Explain quantum computing"
+
+        \b
+        # Run with Anthropic
+        export ANTHROPIC_API_KEY=your_key
+        costplan run "Explain quantum computing" --provider anthropic --model claude-3-5-sonnet-20241022
 
         \b
         # Run from file with specific model
         costplan run --file prompt.txt --model gpt-4
 
         \b
-        # Run with custom base URL (e.g., local proxy)
+        # Run with custom base URL (OpenAI-compatible)
         costplan run "Hello" --base-url http://localhost:8000/v1
     """
     settings = ctx.obj.get("settings")
+    provider_name = provider.lower().strip()
 
-    # Validate API key
+    # Resolve API key for chosen provider
     if not api_key:
-        api_key = settings.get_api_key()
+        api_key = settings.get_api_key() if provider_name == "openai" else settings.get_anthropic_api_key()
     if not api_key:
+        env_var = "OPENAI_API_KEY" if provider_name == "openai" else "ANTHROPIC_API_KEY"
         click.echo(
-            "Error: API key not found. Set OPENAI_API_KEY environment variable "
-            "or use --api-key option.",
+            f"Error: API key not found for provider '{provider}'. Set {env_var} or use --api-key.",
             err=True
         )
         sys.exit(1)
@@ -125,17 +135,19 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
         click.echo("Try 'costplan run --help' for more information.")
         sys.exit(1)
 
-    # Initialize provider and budgeted client (single path for all runs)
+    # Initialize provider via factory and budgeted client
     try:
-        provider = OpenAIProvider(
-            api_key=api_key,
-            base_url=base_url or settings.get_base_url(),
-            settings=settings,
-        )
+        provider_kwargs = {"api_key": api_key, "settings": settings}
+        if provider_name == "openai":
+            provider_kwargs["base_url"] = base_url or settings.get_base_url()
+        prov = create(provider_name=provider_name, **provider_kwargs)
         policy = BudgetPolicy(per_call=per_call, per_session=per_session) if (per_call is not None or per_session is not None) else None
         session = BudgetSession() if policy else None
-        client = BudgetedClient(provider, policy=policy, session=session)
+        client = BudgetedClient(prov, policy=policy, session=session)
         tracker = RunTracker(settings=settings)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
     except Exception as e:
         click.echo(f"Error initializing components: {e}", err=True)
         sys.exit(1)
@@ -146,7 +158,7 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
-        task1 = progress.add_task("🔮 Predicting cost...", total=None)
+        task1 = progress.add_task("Predicting cost...", total=None)
         try:
             prediction, execution, actual = client.execute(
                 prompt_text, model,
@@ -165,9 +177,9 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
         progress.update(task1, completed=True)
         console.print(f"   [green]Predicted: {format_cost(prediction.predicted_total_cost)}[/green]")
 
-        task2 = progress.add_task("⚡ Executing request...", total=None)
+        task2 = progress.add_task("Executing request...", total=None)
         progress.update(task2, completed=True)
-        console.print("   [green]✓ Completed[/green]")
+        console.print("   [green]Completed[/green]")
 
         if not execution.success:
             console.print(f"   [red]Error: {execution.error_message}[/red]")
@@ -180,7 +192,7 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
     )
 
     # Step 4: Store run data
-    run_record = tracker.store_run(prediction, actual, model)
+    run_id = tracker.store_run(prediction, actual, model)
 
     # Step 5: Display comparison with Rich
     console.print("\n")
@@ -208,17 +220,17 @@ def run(ctx, prompt, file, model, api_key, base_url, output_ratio,
     )
 
     error_color = "green" if abs(error) < 15 else "yellow" if abs(error) < 30 else "red"
-    table.add_row("Error", "—", f"[{error_color}]{format_percentage(error)}[/{error_color}]")
-    table.add_row("Run ID", "—", f"[dim]{run_record.id[:8]}...[/dim]")
+    table.add_row("Error", "-", f"[{error_color}]{format_percentage(error)}[/{error_color}]")
+    table.add_row("Run ID", "-", f"[dim]{run_id[:8]}...[/dim]")
 
-    console.print(Panel(table, title="📊 Cost Analysis", border_style="blue"))
+    console.print(Panel(table, title="Cost Analysis", border_style="blue"))
     console.print("\n")
 
     # Show response if requested
     if show_response:
         response_panel = Panel(
             execution.response_text,
-            title="🤖 Response",
+            title="Response",
             border_style="green",
             padding=(1, 2),
         )
@@ -261,7 +273,7 @@ def history(ctx, limit, model):
         return
 
     table = Table(
-        title=f"📜 Recent Runs (showing {len(runs)})", show_header=True, header_style="bold cyan"
+        title=f"Recent Runs (showing {len(runs)})", show_header=True, header_style="bold cyan"
     )
     table.add_column("Timestamp", style="dim")
     table.add_column("Model", style="green")
@@ -349,20 +361,16 @@ def stats(ctx, model):
             table.add_row("Rolling Avg", format_percentage(rolling_avg, include_sign=False))
 
     console.print("\n")
-    console.print(Panel(table, title="📈 Statistics", border_style="blue"))
+    console.print(Panel(table, title="Statistics", border_style="blue"))
 
     # Accuracy assessment
     if avg_error < 10:
         assessment = "[green]Excellent[/green] (< 10%)"
-        emoji = "🎯"
     elif avg_error < 30:
         assessment = "[yellow]Good[/yellow] (< 30%)"
-        emoji = "✅"
     elif avg_error < 50:
         assessment = "[orange]Fair[/orange] (< 50%)"
-        emoji = "⚠️"
     else:
         assessment = "[red]Poor[/red] (> 50%)"
-        emoji = "❌"
 
-    console.print(f"\n{emoji} Prediction Accuracy: {assessment}\n")
+    console.print(f"\nPrediction Accuracy: {assessment}\n")
