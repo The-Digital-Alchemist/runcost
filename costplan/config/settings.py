@@ -54,6 +54,12 @@ class Settings(BaseSettings):
         description="Base URL for OpenAI-compatible API"
     )
 
+    # Anthropic (Claude) API
+    anthropic_api_key: Optional[str] = Field(
+        default=None,
+        description="Anthropic API key for Claude",
+    )
+
     # Azure OpenAI settings (optional)
     azure_openai_endpoint: Optional[str] = Field(
         default=None,
@@ -121,3 +127,7 @@ class Settings(BaseSettings):
             Base URL or None (uses OpenAI default)
         """
         return self.openai_base_url or os.getenv("OPENAI_BASE_URL")
+
+    def get_anthropic_api_key(self) -> Optional[str]:
+        """Get Anthropic API key (settings or ANTHROPIC_API_KEY env)."""
+        return self.anthropic_api_key or os.getenv("ANTHROPIC_API_KEY")

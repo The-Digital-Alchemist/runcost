@@ -29,6 +29,31 @@ class PredictionResult:
         )
 
 
+def build_prediction_result_from_tokens_and_pricing(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    input_price_per_1k: float,
+    output_price_per_1k: float,
+    confidence_level: str = "Medium",
+    confidence_percent: Optional[float] = None,
+) -> PredictionResult:
+    """Build a PredictionResult from token counts and per-1k pricing. Used by providers."""
+    input_cost = (input_tokens / 1000) * input_price_per_1k
+    output_cost = (output_tokens / 1000) * output_price_per_1k
+    total_cost = input_cost + output_cost
+    return PredictionResult(
+        model=model,
+        predicted_input_tokens=input_tokens,
+        predicted_output_tokens=output_tokens,
+        predicted_input_cost=input_cost,
+        predicted_output_cost=output_cost,
+        predicted_total_cost=total_cost,
+        confidence_level=confidence_level,
+        confidence_percent=confidence_percent,
+    )
+
+
 class CostPredictor:
     """Predicts costs for LLM requests before execution."""
 

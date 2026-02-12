@@ -1,6 +1,10 @@
-"""OpenAI (and OpenAI-compatible) provider implementation."""
+"""OpenAI (and OpenAI-compatible) provider implementation.
 
-from typing import Optional, Tuple
+Pricing (pricing.json) and token estimation (tiktoken) are internal to this module.
+The core never opens pricing.json or uses TokenEstimator directly.
+"""
+
+from typing import Optional, Tuple, List
 
 from costplan.core.provider import BaseProvider, TokenPrediction
 from costplan.core.executor import ProviderExecutor, ExecutionResult
@@ -39,7 +43,7 @@ class OpenAIProvider(BaseProvider):
             organization=organization,
             timeout=timeout,
         )
-        self._pricing = pricing_registry or PricingRegistry()
+        self._pricing = pricing_registry or PricingRegistry(provider_name="openai")
         self._estimator = token_estimator or TokenEstimator(
             estimation_mode=(settings or Settings()).token_estimation_mode
         )
@@ -71,8 +75,12 @@ class OpenAIProvider(BaseProvider):
         )
 
     def get_pricing(self, model: str) -> Tuple[float, float]:
-        """Return (input $/1k tokens, output $/1k tokens) from pricing registry."""
+        """Return (input $/1k tokens, output $/1k tokens) from internal pricing registry."""
         return self._pricing.get_model_pricing(model)
+
+    def list_models(self) -> List[str]:
+        """Return model names supported by this provider (from internal pricing)."""
+        return self._pricing.list_supported_models()
 
     def execute_with_messages(
         self,

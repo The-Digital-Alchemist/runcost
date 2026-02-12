@@ -11,17 +11,36 @@ class PricingNotFoundError(Exception):
     pass
 
 
-class PricingRegistry:
-    """Registry for storing and retrieving model pricing information."""
+def _looks_like_provider_map(data: dict) -> bool:
+    """True if data is { "openai": { "gpt-4": {...} }, ... } (multi-provider)."""
+    if not isinstance(data, dict) or not data:
+        return False
+    first_val = next(iter(data.values()))
+    if not isinstance(first_val, dict) or not first_val:
+        return False
+    first_model = next(iter(first_val.values()))
+    return isinstance(first_model, dict) and "input_cost_per_1k_tokens" in first_model
 
-    def __init__(self, pricing_file_path: Optional[str] = None):
+
+class PricingRegistry:
+    """Registry for one provider's model pricing. Loads from a slice of pricing.json."""
+
+    def __init__(
+        self,
+        pricing_file_path: Optional[str] = None,
+        provider_name: Optional[str] = None,
+    ):
         """Initialize the pricing registry.
 
         Args:
-            pricing_file_path: Path to the pricing JSON file. If None, uses default.
+            pricing_file_path: Path to the pricing JSON file. If None, uses default config/pricing.json.
+            provider_name: Top-level key in the JSON (e.g. "openai", "anthropic"). If the file
+                is multi-provider, this selects the slice. If None, the file is treated as flat
+                (single-provider format).
         """
         self._pricing_data: Dict[str, Dict[str, float]] = {}
         self._pricing_file_path = pricing_file_path
+        self._provider_name = provider_name
         self.load_pricing()
 
     def load_pricing(self) -> None:
@@ -34,7 +53,6 @@ class PricingRegistry:
         if self._pricing_file_path:
             pricing_path = Path(self._pricing_file_path)
         else:
-            # Default to the package's config directory
             package_dir = Path(__file__).parent.parent
             pricing_path = package_dir / "config" / "pricing.json"
 
@@ -42,7 +60,22 @@ class PricingRegistry:
             raise FileNotFoundError(f"Pricing file not found: {pricing_path}")
 
         with open(pricing_path, "r", encoding="utf-8") as f:
-            self._pricing_data = json.load(f)
+            data = json.load(f)
+
+        # Multi-provider: {"openai": { "gpt-4": {...} }, "anthropic": {...} }
+        if _looks_like_provider_map(data):
+            provider = self._provider_name
+            if provider is None:
+                provider = "openai"  # default for legacy callers (CostPredictor, etc.)
+            if provider not in data:
+                raise FileNotFoundError(
+                    f"Provider '{provider}' not found in {pricing_path}. "
+                    f"Top-level keys: {list(data.keys())}"
+                )
+            self._pricing_data = data[provider]
+        else:
+            # Flat format (backward compat): { "gpt-4": {...} }
+            self._pricing_data = data
 
     def get_model_pricing(self, model_name: str) -> Tuple[float, float]:
         """Get pricing information for a specific model.

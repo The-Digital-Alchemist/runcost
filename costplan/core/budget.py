@@ -3,7 +3,10 @@
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 from costplan.core.executor import ExecutionResult
-from costplan.core.predictor import PredictionResult
+from costplan.core.predictor import (
+    PredictionResult,
+    build_prediction_result_from_tokens_and_pricing,
+)
 from costplan.core.calculator import ActualCostResult
 
 if TYPE_CHECKING:
@@ -45,29 +48,6 @@ class BudgetSession:
     def reset(self) -> None:
         """Reset session spend to zero."""
         self.total_spent = 0.0
-
-
-def _prediction_from_tokens_and_pricing(
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    input_price_per_1k: float,
-    output_price_per_1k: float,
-) -> PredictionResult:
-    """Build PredictionResult from token counts and pricing."""
-    input_cost = (input_tokens / 1000) * input_price_per_1k
-    output_cost = (output_tokens / 1000) * output_price_per_1k
-    total_cost = input_cost + output_cost
-    return PredictionResult(
-        model=model,
-        predicted_input_tokens=input_tokens,
-        predicted_output_tokens=output_tokens,
-        predicted_input_cost=input_cost,
-        predicted_output_cost=output_cost,
-        predicted_total_cost=total_cost,
-        confidence_level="Medium",
-        confidence_percent=None,
-    )
 
 
 def _actual_from_usage_and_pricing(
@@ -146,12 +126,12 @@ class BudgetedClient:
         """
         token_pred = self.provider.predict_tokens(prompt, model, output_ratio=output_ratio)
         input_price, output_price = self.provider.get_pricing(model)
-        prediction = _prediction_from_tokens_and_pricing(
-            model,
-            token_pred.input_tokens,
-            token_pred.output_tokens,
-            input_price,
-            output_price,
+        prediction = build_prediction_result_from_tokens_and_pricing(
+            model=model,
+            input_tokens=token_pred.input_tokens,
+            output_tokens=token_pred.output_tokens,
+            input_price_per_1k=input_price,
+            output_price_per_1k=output_price,
         )
         predicted_cost = prediction.predicted_total_cost
 
@@ -196,12 +176,12 @@ class BudgetedClient:
             prompt_for_prediction, model, output_ratio=output_ratio
         )
         input_price, output_price = self.provider.get_pricing(model)
-        prediction = _prediction_from_tokens_and_pricing(
-            model,
-            token_pred.input_tokens,
-            token_pred.output_tokens,
-            input_price,
-            output_price,
+        prediction = build_prediction_result_from_tokens_and_pricing(
+            model=model,
+            input_tokens=token_pred.input_tokens,
+            output_tokens=token_pred.output_tokens,
+            input_price_per_1k=input_price,
+            output_price_per_1k=output_price,
         )
         predicted_cost = prediction.predicted_total_cost
 

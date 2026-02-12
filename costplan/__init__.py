@@ -8,7 +8,8 @@ from costplan.core.executor import ProviderExecutor, ExecutionResult
 from costplan.core.pricing import PricingRegistry
 from costplan.core.estimator import TokenEstimator
 from costplan.core.provider import BaseProvider, TokenPrediction
-from costplan.core.providers import OpenAIProvider
+from costplan.core.providers import OpenAIProvider, AnthropicProvider
+from costplan.core.factory import create as create_provider
 from costplan.core.budget import (
     BudgetPolicy,
     BudgetSession,
@@ -30,6 +31,8 @@ __all__ = [
     "BaseProvider",
     "TokenPrediction",
     "OpenAIProvider",
+    "AnthropicProvider",
+    "create_provider",
     "BudgetPolicy",
     "BudgetSession",
     "BudgetExceededError",

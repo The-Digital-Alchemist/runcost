@@ -1,6 +1,8 @@
 """Provider abstraction for LLM backends.
 
 Core logic depends on BaseProvider, not on any specific vendor (OpenAI, etc.).
+Pricing and token estimation are provider-scoped; the core never opens pricing.json
+or uses TokenEstimator directly.
 Implementations live under costplan.core.providers.
 """
 
@@ -8,8 +10,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
 
-# ExecutionResult stays in executor; we use it as the return type for execute()
 from costplan.core.executor import ExecutionResult
+from costplan.core.predictor import (
+    PredictionResult,
+    build_prediction_result_from_tokens_and_pricing,
+)
 
 
 @dataclass
@@ -76,6 +81,27 @@ class BaseProvider(ABC):
             (input $/1k tokens, output $/1k tokens)
         """
         pass
+
+    def predict(
+        self,
+        prompt: str,
+        model: str,
+        output_ratio: Optional[float] = None,
+    ) -> PredictionResult:
+        """Predict cost for a prompt (tokens + pricing via provider). Core uses this; no direct pricing/token logic."""
+        token_pred = self.predict_tokens(prompt, model, output_ratio=output_ratio)
+        input_price, output_price = self.get_pricing(model)
+        return build_prediction_result_from_tokens_and_pricing(
+            model=model,
+            input_tokens=token_pred.input_tokens,
+            output_tokens=token_pred.output_tokens,
+            input_price_per_1k=input_price,
+            output_price_per_1k=output_price,
+        )
+
+    def list_models(self) -> List[str]:
+        """Return list of model names this provider supports (for pricing/list). Default: empty."""
+        return []
 
     def execute_with_messages(
         self,
