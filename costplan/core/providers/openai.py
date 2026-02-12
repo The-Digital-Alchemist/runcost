@@ -44,8 +44,10 @@ class OpenAIProvider(BaseProvider):
             timeout=timeout,
         )
         self._pricing = pricing_registry or PricingRegistry(provider_name="openai")
+        _settings = settings or Settings()
         self._estimator = token_estimator or TokenEstimator(
-            estimation_mode=(settings or Settings()).token_estimation_mode
+            estimation_mode=_settings.token_estimation_mode,
+            allow_heuristic_fallback=False,  # Production: provider-accurate tokenizer only
         )
         self._settings = settings or Settings()
 
@@ -55,7 +57,7 @@ class OpenAIProvider(BaseProvider):
         model: str,
         output_ratio: Optional[float] = None,
     ) -> TokenPrediction:
-        """Use tiktoken (or heuristic) to predict input tokens; derive output from ratio."""
+        """Input tokens from tiktoken only (no fallback). Output tokens from ratio for cost prediction."""
         input_tokens = self._estimator.estimate_tokens(prompt, model)
         ratio = output_ratio or self._settings.default_output_ratio
         output_tokens = int(input_tokens * ratio)

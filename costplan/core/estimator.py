@@ -7,42 +7,42 @@ logger = logging.getLogger(__name__)
 
 
 class TokenEstimator:
-    """Estimates token counts for text inputs."""
+    """Token counts for LLM inputs. Production: use provider-accurate tokenizer only (no fallback)."""
 
-    def __init__(self, estimation_mode: str = "tiktoken"):
+    def __init__(
+        self,
+        estimation_mode: str = "tiktoken",
+        allow_heuristic_fallback: bool = True,
+    ):
         """Initialize the token estimator.
 
         Args:
-            estimation_mode: Estimation mode - "tiktoken" or "heuristic"
+            estimation_mode: "tiktoken" (provider-accurate for OpenAI) or "heuristic"
+            allow_heuristic_fallback: If False, never fall back to heuristic; raise on tiktoken failure.
         """
         self.estimation_mode = estimation_mode
+        self.allow_heuristic_fallback = allow_heuristic_fallback
         self._encoders = {}  # Cache for tiktoken encoders
 
     def estimate_tokens(self, text: str, model: str) -> int:
-        """Estimate token count for text.
-
-        Args:
-            text: Input text to estimate
-            model: Model name (used for tiktoken encoding)
-
-        Returns:
-            Estimated token count
-        """
+        """Token count for text. When tiktoken and no fallback: deterministic, provider-accurate."""
         if not text:
             return 0
 
-        # Try tiktoken first if enabled
         if self.estimation_mode == "tiktoken":
             try:
                 return self._estimate_with_tiktoken(text, model)
             except Exception as e:
+                if not self.allow_heuristic_fallback:
+                    raise RuntimeError(
+                        f"Tiktoken failed for model {model} (no fallback). {e}"
+                    ) from e
                 logger.warning(
                     f"Tiktoken estimation failed for model {model}: {e}. "
                     "Falling back to heuristic."
                 )
                 return self._estimate_with_heuristic(text)
-        else:
-            return self._estimate_with_heuristic(text)
+        return self._estimate_with_heuristic(text)
 
     def estimate_from_messages(
         self,
@@ -61,14 +61,16 @@ class TokenEstimator:
         if not messages:
             return 0
 
-        # Try tiktoken with proper message formatting
         if self.estimation_mode == "tiktoken":
             try:
                 return self._estimate_messages_with_tiktoken(messages, model)
             except Exception as e:
+                if not self.allow_heuristic_fallback:
+                    raise RuntimeError(
+                        f"Tiktoken message estimation failed (no fallback). {e}"
+                    ) from e
                 logger.warning(
-                    f"Tiktoken message estimation failed: {e}. "
-                    "Falling back to heuristic."
+                    f"Tiktoken message estimation failed: {e}. Falling back to heuristic."
                 )
 
         # Fallback: estimate each message content + overhead

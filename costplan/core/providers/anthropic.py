@@ -1,6 +1,6 @@
 """Anthropic Claude provider implementation.
 
-Pricing (pricing.json anthropic slice) and token estimation are internal to this module.
+Pricing (pricing.json anthropic slice) and token counting (API count_tokens or heuristic) internal.
 """
 
 import logging
@@ -14,14 +14,21 @@ from costplan.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
+# Strict mode: no client → raise. Non-strict: no client → allow heuristic fallback.
+STRICT_TOKEN_COUNT_DEFAULT = True
+
 
 def _heuristic_tokens(text: str) -> int:
-    """Rough token estimate (Claude ~4 chars per token)."""
+    """Rough token estimate (Claude ~4 chars per token). Only used in non-strict mode when no client."""
     return max(1, len(text) // 4)
 
 
+def _has_api_key(api_key: Optional[str]) -> bool:
+    return bool(api_key or os.environ.get("ANTHROPIC_API_KEY"))
+
+
 class AnthropicProvider(BaseProvider):
-    """Anthropic Claude API provider. Uses heuristic token estimation (no tiktoken for Claude)."""
+    """Anthropic Claude API provider. Accurate input tokens via count_tokens() when client exists; strict mode raises when no client."""
 
     def __init__(
         self,
@@ -29,6 +36,7 @@ class AnthropicProvider(BaseProvider):
         timeout: float = 60.0,
         pricing_registry: Optional[PricingRegistry] = None,
         settings: Optional[Settings] = None,
+        strict_token_count: bool = STRICT_TOKEN_COUNT_DEFAULT,
     ):
         """Initialize the Anthropic provider.
 
@@ -37,15 +45,17 @@ class AnthropicProvider(BaseProvider):
             timeout: Request timeout in seconds
             pricing_registry: Uses default pricing.json anthropic slice if None
             settings: For default output ratio (default if None)
+            strict_token_count: If True, require API client for predict_tokens (use count_tokens()); if no key, raise. If False, fall back to heuristic when no client.
         """
         self._api_key = api_key
         self._timeout = timeout
         self._pricing = pricing_registry or PricingRegistry(provider_name="anthropic")
         self._settings = settings or Settings()
-        self._client = None  # Lazy init so predict-only usage doesn't require key
+        self._strict_token_count = strict_token_count
+        self._client = None  # Lazy init
 
     def _get_client(self):
-        """Lazy-init Anthropic client (needed only for execute)."""
+        """Lazy-init Anthropic client. Raises if no API key."""
         if self._client is None:
             try:
                 import anthropic
@@ -62,14 +72,40 @@ class AnthropicProvider(BaseProvider):
             self._client = anthropic.Anthropic(api_key=key, timeout=self._timeout)
         return self._client
 
+    def _count_input_tokens_via_api(self, prompt: str, model: str) -> int:
+        """Call Anthropic count_tokens API. Raises on failure or missing client."""
+        client = self._get_client()
+        resp = client.messages.count_tokens(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return getattr(resp, "input_tokens", 0) or 0
+
     def predict_tokens(
         self,
         prompt: str,
         model: str,
         output_ratio: Optional[float] = None,
     ) -> TokenPrediction:
-        """Heuristic token estimate (Claude tokenizer not public)."""
-        input_tokens = _heuristic_tokens(prompt)
+        """Input tokens: from count_tokens() API when client exists; else strict → raise, non-strict → heuristic."""
+        if _has_api_key(self._api_key):
+            try:
+                input_tokens = self._count_input_tokens_via_api(prompt, model)
+            except Exception as e:
+                if self._strict_token_count:
+                    raise RuntimeError(
+                        f"Anthropic count_tokens failed (strict mode). {e}"
+                    ) from e
+                logger.warning("count_tokens failed, falling back to heuristic: %s", e)
+                input_tokens = _heuristic_tokens(prompt)
+        else:
+            if self._strict_token_count:
+                raise RuntimeError(
+                    "Anthropic API key required for token count in strict mode. "
+                    "Set ANTHROPIC_API_KEY or pass api_key=, or use strict_token_count=False to allow heuristic fallback."
+                )
+            input_tokens = _heuristic_tokens(prompt)
+
         ratio = output_ratio or self._settings.default_output_ratio
         output_tokens = int(input_tokens * ratio)
         return TokenPrediction(input_tokens=input_tokens, output_tokens=output_tokens)

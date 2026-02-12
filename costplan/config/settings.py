@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,10 +54,11 @@ class Settings(BaseSettings):
         description="Base URL for OpenAI-compatible API"
     )
 
-    # Anthropic (Claude) API
+    # Anthropic (Claude) API 
     anthropic_api_key: Optional[str] = Field(
         default=None,
         description="Anthropic API key for Claude",
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY"),
     )
 
     # Azure OpenAI settings (optional)

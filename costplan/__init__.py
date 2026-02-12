@@ -14,7 +14,9 @@ from costplan.core.budget import (
     BudgetPolicy,
     BudgetSession,
     BudgetExceededError,
+    BudgetViolationError,
     BudgetedClient,
+    BudgetedLLM,
 )
 from costplan.storage.tracker import RunTracker
 from costplan.config.settings import Settings
@@ -36,7 +38,9 @@ __all__ = [
     "BudgetPolicy",
     "BudgetSession",
     "BudgetExceededError",
+    "BudgetViolationError",
     "BudgetedClient",
+    "BudgetedLLM",
     "RunTracker",
     "Settings",
 ]

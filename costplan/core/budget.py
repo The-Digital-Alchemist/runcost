@@ -1,6 +1,11 @@
-"""Budget policy and session tracking for LLM cost control."""
+"""Budget policy and session tracking for LLM cost control.
 
-from typing import Optional, List, Dict, Any, TYPE_CHECKING
+Production API: BudgetedLLM — lightweight execution wrapper that guarantees LLM calls
+stay within defined economic constraints. Hard per-call and per-session budget,
+deterministic BudgetExceededError, dynamic max_tokens from remaining budget.
+"""
+
+from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union
 
 from costplan.core.executor import ExecutionResult
 from costplan.core.predictor import (
@@ -13,11 +18,37 @@ if TYPE_CHECKING:
     from costplan.core.provider import BaseProvider
 
 
-class BudgetExceededError(Exception):
-    """Raised when a call or session would exceed the configured budget."""
+# Epsilon for post-execution assertion (pricing drift, rounding).
+BUDGET_ASSERTION_EPSILON = 1e-6
 
-    def __init__(self, message: str, limit_type: str = "budget"):
-        self.limit_type = limit_type  # "per_call" or "per_session"
+
+class BudgetExceededError(Exception):
+    """Deterministic exception when a call or session would exceed budget. Catch this in agent loops."""
+
+    def __init__(
+        self,
+        message: str,
+        limit_type: str = "budget",
+        remaining_budget: Optional[float] = None,
+        allowed_budget: Optional[float] = None,
+    ):
+        self.limit_type = limit_type  # "per_call" | "per_session" | "session_locked"
+        self.remaining_budget = remaining_budget
+        self.allowed_budget = allowed_budget
+        super().__init__(message)
+
+
+class BudgetViolationError(Exception):
+    """Post-execution invariant violation: actual cost exceeded allowed budget (pricing drift, rounding, token drift)."""
+
+    def __init__(
+        self,
+        message: str,
+        actual_cost: float,
+        allowed_budget: float,
+    ):
+        self.actual_cost = actual_cost
+        self.allowed_budget = allowed_budget
         super().__init__(message)
 
 
@@ -208,3 +239,158 @@ class BudgetedClient:
             self.session.total_spent += actual.actual_total_cost
 
         return prediction, execution, actual
+
+
+# -----------------------------------------------------------------------------
+# BudgetedLLM: production circuit breaker. Hard limits, dynamic max_tokens, lock.
+# -----------------------------------------------------------------------------
+
+def _resolve_provider(provider: Union[str, "BaseProvider"], settings: Optional[Any]) -> "BaseProvider":
+    """Return BaseProvider from str (via factory) or use as-is."""
+    if isinstance(provider, str):
+        from costplan.core.factory import create
+        from costplan.config.settings import Settings
+        return create(provider_name=provider, settings=settings or Settings())
+    return provider
+
+
+class BudgetedLLM:
+    """
+    Lightweight execution wrapper that guarantees LLM calls stay within economic constraints.
+    Hard per-call and per-session budget, deterministic BudgetExceededError, dynamic max_tokens.
+    Use in agent loops: response = client.generate(prompt); catch BudgetExceededError.
+    """
+
+    def __init__(
+        self,
+        provider: Union[str, "BaseProvider"],
+        model: str,
+        per_call_budget: float,
+        session_budget: float,
+        settings: Optional[Any] = None,
+        output_ratio: Optional[float] = None,
+    ):
+        """
+        Args:
+            provider: Provider name (str) or BaseProvider instance.
+            model: Model id (e.g. "claude-3-5-sonnet-20241022", "gpt-4o").
+            per_call_budget: Max dollars per call; enforced before execute.
+            session_budget: Max dollars for session; when exceeded, client locks.
+            settings: Optional Settings (used when provider is str).
+            output_ratio: Optional override for output token prediction (default from settings).
+        """
+        self._provider = _resolve_provider(provider, settings)
+        self._model = model
+        self._per_call_budget = per_call_budget
+        self._session_budget = session_budget
+        self._session_spent = 0.0
+        self._locked = False
+        self._settings = settings
+        self._output_ratio = output_ratio
+
+    def remaining_budget(self) -> float:
+        """Remaining session budget in dollars. Production agent loops call this to adapt behavior."""
+        return max(0.0, self._session_budget - self._session_spent)
+
+    @property
+    def session_spent(self) -> float:
+        """Total spent this session in dollars."""
+        return self._session_spent
+
+    @property
+    def locked(self) -> bool:
+        """True when session budget exhausted; generate() will raise until reset or new client."""
+        return self._locked
+
+    def generate(
+        self,
+        prompt: str,
+        temperature: float = 1.0,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """
+        Execute one call within budget. Injects max_tokens from remaining budget.
+        Raises BudgetExceededError on per-call or per-session exceed; on session exhaust, locks.
+        """
+        if self._locked:
+            raise BudgetExceededError(
+                f"Session budget exhausted (spent ${self._session_spent:.4f}, limit ${self._session_budget:.4f}). Client locked.",
+                limit_type="session_locked",
+                remaining_budget=0.0,
+            )
+
+        token_pred = self._provider.predict_tokens(
+            prompt, self._model, output_ratio=self._output_ratio
+        )
+        input_price_per_1k, output_price_per_1k = self._provider.get_pricing(self._model)
+
+        predicted_input_cost = (token_pred.input_tokens / 1000) * input_price_per_1k
+        predicted_output_cost = (token_pred.output_tokens / 1000) * output_price_per_1k
+        predicted_total_cost = predicted_input_cost + predicted_output_cost
+
+        if predicted_total_cost > self._per_call_budget:
+            raise BudgetExceededError(
+                f"Predicted cost ${predicted_total_cost:.4f} exceeds per-call budget ${self._per_call_budget:.4f}",
+                limit_type="per_call",
+                remaining_budget=self.remaining_budget(),
+                allowed_budget=self._per_call_budget,
+            )
+
+        remaining_session_budget = self._session_budget - self._session_spent
+        allowed_budget = min(self._per_call_budget, remaining_session_budget)
+
+        if allowed_budget <= 0:
+            self._locked = True
+            raise BudgetExceededError(
+                "No remaining session budget.",
+                limit_type="per_session",
+                remaining_budget=0.0,
+            )
+
+        if predicted_input_cost >= allowed_budget:
+            raise BudgetExceededError(
+                f"Predicted input cost ${predicted_input_cost:.4f} >= allowed budget ${allowed_budget:.4f}",
+                limit_type="per_session",
+                remaining_budget=remaining_session_budget,
+            )
+
+        allowed_output_budget = allowed_budget - predicted_input_cost
+        output_cost_per_token = output_price_per_1k / 1000.0
+        if output_cost_per_token <= 0:
+            max_output_tokens = 8192
+        else:
+            max_output_tokens = int(allowed_output_budget / output_cost_per_token)
+        max_output_tokens = max(1, min(max_output_tokens, 16_384))
+
+        execution = self._provider.execute(
+            prompt,
+            self._model,
+            temperature=temperature,
+            max_tokens=max_output_tokens,
+            **kwargs,
+        )
+
+        if not execution.success:
+            return execution
+
+        actual = _actual_from_usage_and_pricing(
+            self._model,
+            execution.usage,
+            input_price_per_1k,
+            output_price_per_1k,
+        )
+
+        # Post-execution assertion: protect against pricing changes, token drift, rounding.
+        if actual.actual_total_cost > allowed_budget + BUDGET_ASSERTION_EPSILON:
+            raise BudgetViolationError(
+                f"Budget invariant violated: actual cost ${actual.actual_total_cost:.6f} > allowed ${allowed_budget:.6f}",
+                actual_cost=actual.actual_total_cost,
+                allowed_budget=allowed_budget,
+            )
+
+        self._session_spent += actual.actual_total_cost
+
+        if self._session_spent >= self._session_budget:
+            self._locked = True
+
+        return execution
