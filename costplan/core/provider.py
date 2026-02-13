@@ -6,6 +6,7 @@ or uses TokenEstimator directly.
 Implementations live under costplan.core.providers.
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Tuple
@@ -116,4 +117,38 @@ class BaseProvider(ABC):
         prompt = "\n".join(m.get("content", "") for m in messages if m.get("content"))
         return self.execute(
             prompt, model, temperature=temperature, max_tokens=max_tokens, **kwargs
+        )
+
+    # --- Async methods (default: run sync in executor) ---
+
+    async def async_execute(
+        self,
+        prompt: str,
+        model: str,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Async execute a completion. Default runs sync execute in a thread executor.
+        Override in providers with native async support (e.g. openai.AsyncOpenAI).
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.execute(prompt, model, temperature=temperature, max_tokens=max_tokens, **kwargs),
+        )
+
+    async def async_execute_with_messages(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Async execute with messages. Default runs sync in a thread executor."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.execute_with_messages(messages, model, temperature=temperature, max_tokens=max_tokens, **kwargs),
         )

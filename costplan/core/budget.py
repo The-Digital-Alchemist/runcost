@@ -1,11 +1,14 @@
 """Budget policy and session tracking for LLM cost control.
 
-Production API: BudgetedLLM — lightweight execution wrapper that guarantees LLM calls
-stay within defined economic constraints. Hard per-call and per-session budget,
-deterministic BudgetExceededError, dynamic max_tokens from remaining budget.
+Production API: BudgetedLLM / AsyncBudgetedLLM — lightweight execution wrappers that
+guarantee LLM calls stay within defined economic constraints. Hard per-call and
+per-session budget, deterministic BudgetExceededError, dynamic max_tokens from
+remaining budget. Thread-safe (BudgetedLLM) and asyncio-safe (AsyncBudgetedLLM).
 """
 
-from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union
+import asyncio
+import threading
+from typing import Optional, List, Dict, Any, Callable, TYPE_CHECKING, Union
 
 from costplan.core.executor import ExecutionResult
 from costplan.core.predictor import (
@@ -20,6 +23,9 @@ if TYPE_CHECKING:
 
 # Epsilon for post-execution assertion (pricing drift, rounding).
 BUDGET_ASSERTION_EPSILON = 1e-6
+
+# Default warning threshold: fire callback when session spend exceeds this fraction.
+DEFAULT_WARNING_THRESHOLD = 0.8
 
 
 class BudgetExceededError(Exception):
@@ -242,7 +248,7 @@ class BudgetedClient:
 
 
 # -----------------------------------------------------------------------------
-# BudgetedLLM: production circuit breaker. Hard limits, dynamic max_tokens, lock.
+# BudgetedLLM: production circuit breaker. Thread-safe. Hard limits, dynamic max_tokens.
 # -----------------------------------------------------------------------------
 
 def _resolve_provider(provider: Union[str, "BaseProvider"], settings: Optional[Any]) -> "BaseProvider":
@@ -254,9 +260,39 @@ def _resolve_provider(provider: Union[str, "BaseProvider"], settings: Optional[A
     return provider
 
 
+def _extract_text_from_messages(messages: List[Dict[str, Any]]) -> str:
+    """Extract text content from a list of chat messages for token prediction."""
+    parts: list[str] = []
+    for m in messages:
+        content = m.get("content", "")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            # Handle content blocks (e.g. Anthropic format: [{"type": "text", "text": "..."}])
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+    return "\n".join(parts)
+
+
+def _compute_budget_constrained_max_tokens(
+    predicted_input_cost: float,
+    allowed_budget: float,
+    output_price_per_1k: float,
+) -> int:
+    """Compute max output tokens that fit within the allowed budget after input cost."""
+    allowed_output_budget = allowed_budget - predicted_input_cost
+    output_cost_per_token = output_price_per_1k / 1000.0
+    if output_cost_per_token <= 0:
+        max_output_tokens = 8192
+    else:
+        max_output_tokens = int(allowed_output_budget / output_cost_per_token)
+    return max(1, min(max_output_tokens, 16_384))
+
+
 class BudgetedLLM:
     """
-    Lightweight execution wrapper that guarantees LLM calls stay within economic constraints.
+    Thread-safe execution wrapper that guarantees LLM calls stay within economic constraints.
     Hard per-call and per-session budget, deterministic BudgetExceededError, dynamic max_tokens.
     Use in agent loops: response = client.generate(prompt); catch BudgetExceededError.
     """
@@ -269,15 +305,20 @@ class BudgetedLLM:
         session_budget: float,
         settings: Optional[Any] = None,
         output_ratio: Optional[float] = None,
+        on_budget_warning: Optional[Callable[[float, float, float], None]] = None,
+        warning_threshold: float = DEFAULT_WARNING_THRESHOLD,
     ):
         """
         Args:
             provider: Provider name (str) or BaseProvider instance.
-            model: Model id (e.g. "claude-3-5-sonnet-20241022", "gpt-4o").
+            model: Model id (e.g. "claude-sonnet-4-20250514", "gpt-4o").
             per_call_budget: Max dollars per call; enforced before execute.
             session_budget: Max dollars for session; when exceeded, client locks.
             settings: Optional Settings (used when provider is str).
             output_ratio: Optional override for output token prediction (default from settings).
+            on_budget_warning: Optional callback(spent, remaining, session_budget) fired when
+                spend exceeds warning_threshold fraction of session_budget.
+            warning_threshold: Fraction of session_budget at which warning fires (default 0.8).
         """
         self._provider = _resolve_provider(provider, settings)
         self._model = model
@@ -287,20 +328,145 @@ class BudgetedLLM:
         self._locked = False
         self._settings = settings
         self._output_ratio = output_ratio
+        self._on_budget_warning = on_budget_warning
+        self._warning_threshold = warning_threshold
+        self._warning_fired = False
+        self._lock = threading.Lock()
 
     def remaining_budget(self) -> float:
         """Remaining session budget in dollars. Production agent loops call this to adapt behavior."""
-        return max(0.0, self._session_budget - self._session_spent)
+        with self._lock:
+            return max(0.0, self._session_budget - self._session_spent)
 
     @property
     def session_spent(self) -> float:
         """Total spent this session in dollars."""
-        return self._session_spent
+        with self._lock:
+            return self._session_spent
 
     @property
     def locked(self) -> bool:
         """True when session budget exhausted; generate() will raise until reset or new client."""
-        return self._locked
+        with self._lock:
+            return self._locked
+
+    def reset(self) -> None:
+        """Reset session: zero spend, unlock. Use to start a new budget cycle without creating a new client."""
+        with self._lock:
+            self._session_spent = 0.0
+            self._locked = False
+            self._warning_fired = False
+
+    def _fire_warning_if_needed(self) -> None:
+        """Fire the budget warning callback if threshold exceeded and not yet fired."""
+        if (
+            self._on_budget_warning is not None
+            and not self._warning_fired
+            and self._session_spent >= self._session_budget * self._warning_threshold
+        ):
+            self._warning_fired = True
+            remaining = max(0.0, self._session_budget - self._session_spent)
+            try:
+                self._on_budget_warning(self._session_spent, remaining, self._session_budget)
+            except Exception:
+                pass  # Never let callback errors break the circuit breaker
+
+    def _execute_budgeted(
+        self,
+        prompt_text: str,
+        execute_fn: Callable[..., ExecutionResult],
+        temperature: float = 1.0,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Core budget enforcement logic shared by generate() and generate_with_messages().
+
+        Args:
+            prompt_text: Text used for token prediction.
+            execute_fn: Callable that performs the actual LLM call (bound with prompt/messages).
+            temperature: Sampling temperature.
+            **kwargs: Extra args for execute_fn.
+        """
+        with self._lock:
+            if self._locked:
+                raise BudgetExceededError(
+                    f"Session budget exhausted (spent ${self._session_spent:.4f}, limit ${self._session_budget:.4f}). Client locked.",
+                    limit_type="session_locked",
+                    remaining_budget=0.0,
+                )
+
+            token_pred = self._provider.predict_tokens(
+                prompt_text, self._model, output_ratio=self._output_ratio
+            )
+            input_price_per_1k, output_price_per_1k = self._provider.get_pricing(self._model)
+
+            predicted_input_cost = (token_pred.input_tokens / 1000) * input_price_per_1k
+            predicted_output_cost = (token_pred.output_tokens / 1000) * output_price_per_1k
+            predicted_total_cost = predicted_input_cost + predicted_output_cost
+
+            if predicted_total_cost > self._per_call_budget:
+                raise BudgetExceededError(
+                    f"Predicted cost ${predicted_total_cost:.4f} exceeds per-call budget ${self._per_call_budget:.4f}",
+                    limit_type="per_call",
+                    remaining_budget=max(0.0, self._session_budget - self._session_spent),
+                    allowed_budget=self._per_call_budget,
+                )
+
+            remaining_session_budget = self._session_budget - self._session_spent
+            allowed_budget = min(self._per_call_budget, remaining_session_budget)
+
+            if allowed_budget <= 0:
+                self._locked = True
+                raise BudgetExceededError(
+                    "No remaining session budget.",
+                    limit_type="per_session",
+                    remaining_budget=0.0,
+                )
+
+            if predicted_input_cost >= allowed_budget:
+                raise BudgetExceededError(
+                    f"Predicted input cost ${predicted_input_cost:.4f} >= allowed budget ${allowed_budget:.4f}",
+                    limit_type="per_session",
+                    remaining_budget=remaining_session_budget,
+                )
+
+            max_output_tokens = _compute_budget_constrained_max_tokens(
+                predicted_input_cost, allowed_budget, output_price_per_1k
+            )
+
+        # Execute outside the lock (network I/O can be slow)
+        execution = execute_fn(
+            temperature=temperature,
+            max_tokens=max_output_tokens,
+            **kwargs,
+        )
+
+        if not execution.success:
+            return execution
+
+        actual = _actual_from_usage_and_pricing(
+            self._model,
+            execution.usage,
+            input_price_per_1k,
+            output_price_per_1k,
+        )
+
+        with self._lock:
+            # Post-execution assertion
+            if actual.actual_total_cost > allowed_budget + BUDGET_ASSERTION_EPSILON:
+                raise BudgetViolationError(
+                    f"Budget invariant violated: actual cost ${actual.actual_total_cost:.6f} > allowed ${allowed_budget:.6f}",
+                    actual_cost=actual.actual_total_cost,
+                    allowed_budget=allowed_budget,
+                )
+
+            self._session_spent += actual.actual_total_cost
+
+            if self._session_spent >= self._session_budget:
+                self._locked = True
+
+            self._fire_warning_if_needed()
+
+        return execution
 
     def generate(
         self,
@@ -312,57 +478,173 @@ class BudgetedLLM:
         Execute one call within budget. Injects max_tokens from remaining budget.
         Raises BudgetExceededError on per-call or per-session exceed; on session exhaust, locks.
         """
-        if self._locked:
-            raise BudgetExceededError(
-                f"Session budget exhausted (spent ${self._session_spent:.4f}, limit ${self._session_budget:.4f}). Client locked.",
-                limit_type="session_locked",
-                remaining_budget=0.0,
+        def _execute(temperature: float, max_tokens: int, **kw: Any) -> ExecutionResult:
+            return self._provider.execute(
+                prompt, self._model, temperature=temperature, max_tokens=max_tokens, **kw
             )
 
-        token_pred = self._provider.predict_tokens(
-            prompt, self._model, output_ratio=self._output_ratio
-        )
-        input_price_per_1k, output_price_per_1k = self._provider.get_pricing(self._model)
+        return self._execute_budgeted(prompt, _execute, temperature=temperature, **kwargs)
 
-        predicted_input_cost = (token_pred.input_tokens / 1000) * input_price_per_1k
-        predicted_output_cost = (token_pred.output_tokens / 1000) * output_price_per_1k
-        predicted_total_cost = predicted_input_cost + predicted_output_cost
+    def generate_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 1.0,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """
+        Execute one call with chat messages within budget. Same guarantees as generate().
+        Use for agent loops that accumulate conversation history.
+        """
+        prompt_text = _extract_text_from_messages(messages)
 
-        if predicted_total_cost > self._per_call_budget:
-            raise BudgetExceededError(
-                f"Predicted cost ${predicted_total_cost:.4f} exceeds per-call budget ${self._per_call_budget:.4f}",
-                limit_type="per_call",
-                remaining_budget=self.remaining_budget(),
-                allowed_budget=self._per_call_budget,
+        def _execute(temperature: float, max_tokens: int, **kw: Any) -> ExecutionResult:
+            return self._provider.execute_with_messages(
+                messages, self._model, temperature=temperature, max_tokens=max_tokens, **kw
             )
 
-        remaining_session_budget = self._session_budget - self._session_spent
-        allowed_budget = min(self._per_call_budget, remaining_session_budget)
+        return self._execute_budgeted(prompt_text, _execute, temperature=temperature, **kwargs)
 
-        if allowed_budget <= 0:
-            self._locked = True
-            raise BudgetExceededError(
-                "No remaining session budget.",
-                limit_type="per_session",
-                remaining_budget=0.0,
+
+# -----------------------------------------------------------------------------
+# AsyncBudgetedLLM: async circuit breaker. asyncio.Lock for coroutine safety.
+# -----------------------------------------------------------------------------
+
+class AsyncBudgetedLLM:
+    """
+    Async execution wrapper that guarantees LLM calls stay within economic constraints.
+    Same guarantees as BudgetedLLM but using asyncio.Lock for coroutine safety.
+    Use in async agent loops: response = await client.generate(prompt).
+    """
+
+    def __init__(
+        self,
+        provider: Union[str, "BaseProvider"],
+        model: str,
+        per_call_budget: float,
+        session_budget: float,
+        settings: Optional[Any] = None,
+        output_ratio: Optional[float] = None,
+        on_budget_warning: Optional[Callable[[float, float, float], None]] = None,
+        warning_threshold: float = DEFAULT_WARNING_THRESHOLD,
+    ):
+        """
+        Args:
+            provider: Provider name (str) or BaseProvider instance.
+            model: Model id (e.g. "claude-sonnet-4-20250514", "gpt-4o").
+            per_call_budget: Max dollars per call; enforced before execute.
+            session_budget: Max dollars for session; when exceeded, client locks.
+            settings: Optional Settings (used when provider is str).
+            output_ratio: Optional override for output token prediction.
+            on_budget_warning: Optional callback(spent, remaining, session_budget).
+            warning_threshold: Fraction of session_budget at which warning fires (default 0.8).
+        """
+        self._provider = _resolve_provider(provider, settings)
+        self._model = model
+        self._per_call_budget = per_call_budget
+        self._session_budget = session_budget
+        self._session_spent = 0.0
+        self._locked = False
+        self._settings = settings
+        self._output_ratio = output_ratio
+        self._on_budget_warning = on_budget_warning
+        self._warning_threshold = warning_threshold
+        self._warning_fired = False
+        self._lock = asyncio.Lock()
+
+    async def remaining_budget(self) -> float:
+        """Remaining session budget in dollars."""
+        async with self._lock:
+            return max(0.0, self._session_budget - self._session_spent)
+
+    @property
+    def session_spent(self) -> float:
+        """Total spent this session in dollars. Not async — read-only snapshot."""
+        return self._session_spent
+
+    @property
+    def locked(self) -> bool:
+        """True when session budget exhausted."""
+        return self._locked
+
+    async def reset(self) -> None:
+        """Reset session: zero spend, unlock."""
+        async with self._lock:
+            self._session_spent = 0.0
+            self._locked = False
+            self._warning_fired = False
+
+    def _fire_warning_if_needed(self) -> None:
+        """Fire the budget warning callback if threshold exceeded and not yet fired."""
+        if (
+            self._on_budget_warning is not None
+            and not self._warning_fired
+            and self._session_spent >= self._session_budget * self._warning_threshold
+        ):
+            self._warning_fired = True
+            remaining = max(0.0, self._session_budget - self._session_spent)
+            try:
+                self._on_budget_warning(self._session_spent, remaining, self._session_budget)
+            except Exception:
+                pass
+
+    async def generate(
+        self,
+        prompt: str,
+        temperature: float = 1.0,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """
+        Async execute one call within budget. Same guarantees as BudgetedLLM.generate().
+        """
+        async with self._lock:
+            if self._locked:
+                raise BudgetExceededError(
+                    f"Session budget exhausted (spent ${self._session_spent:.4f}, limit ${self._session_budget:.4f}). Client locked.",
+                    limit_type="session_locked",
+                    remaining_budget=0.0,
+                )
+
+            token_pred = self._provider.predict_tokens(
+                prompt, self._model, output_ratio=self._output_ratio
+            )
+            input_price_per_1k, output_price_per_1k = self._provider.get_pricing(self._model)
+
+            predicted_input_cost = (token_pred.input_tokens / 1000) * input_price_per_1k
+            predicted_output_cost = (token_pred.output_tokens / 1000) * output_price_per_1k
+            predicted_total_cost = predicted_input_cost + predicted_output_cost
+
+            if predicted_total_cost > self._per_call_budget:
+                raise BudgetExceededError(
+                    f"Predicted cost ${predicted_total_cost:.4f} exceeds per-call budget ${self._per_call_budget:.4f}",
+                    limit_type="per_call",
+                    remaining_budget=max(0.0, self._session_budget - self._session_spent),
+                    allowed_budget=self._per_call_budget,
+                )
+
+            remaining_session_budget = self._session_budget - self._session_spent
+            allowed_budget = min(self._per_call_budget, remaining_session_budget)
+
+            if allowed_budget <= 0:
+                self._locked = True
+                raise BudgetExceededError(
+                    "No remaining session budget.",
+                    limit_type="per_session",
+                    remaining_budget=0.0,
+                )
+
+            if predicted_input_cost >= allowed_budget:
+                raise BudgetExceededError(
+                    f"Predicted input cost ${predicted_input_cost:.4f} >= allowed budget ${allowed_budget:.4f}",
+                    limit_type="per_session",
+                    remaining_budget=remaining_session_budget,
+                )
+
+            max_output_tokens = _compute_budget_constrained_max_tokens(
+                predicted_input_cost, allowed_budget, output_price_per_1k
             )
 
-        if predicted_input_cost >= allowed_budget:
-            raise BudgetExceededError(
-                f"Predicted input cost ${predicted_input_cost:.4f} >= allowed budget ${allowed_budget:.4f}",
-                limit_type="per_session",
-                remaining_budget=remaining_session_budget,
-            )
-
-        allowed_output_budget = allowed_budget - predicted_input_cost
-        output_cost_per_token = output_price_per_1k / 1000.0
-        if output_cost_per_token <= 0:
-            max_output_tokens = 8192
-        else:
-            max_output_tokens = int(allowed_output_budget / output_cost_per_token)
-        max_output_tokens = max(1, min(max_output_tokens, 16_384))
-
-        execution = self._provider.execute(
+        # Execute outside the lock
+        execution = await self._provider.async_execute(
             prompt,
             self._model,
             temperature=temperature,
@@ -380,17 +662,109 @@ class BudgetedLLM:
             output_price_per_1k,
         )
 
-        # Post-execution assertion: protect against pricing changes, token drift, rounding.
-        if actual.actual_total_cost > allowed_budget + BUDGET_ASSERTION_EPSILON:
-            raise BudgetViolationError(
-                f"Budget invariant violated: actual cost ${actual.actual_total_cost:.6f} > allowed ${allowed_budget:.6f}",
-                actual_cost=actual.actual_total_cost,
-                allowed_budget=allowed_budget,
+        async with self._lock:
+            if actual.actual_total_cost > allowed_budget + BUDGET_ASSERTION_EPSILON:
+                raise BudgetViolationError(
+                    f"Budget invariant violated: actual cost ${actual.actual_total_cost:.6f} > allowed ${allowed_budget:.6f}",
+                    actual_cost=actual.actual_total_cost,
+                    allowed_budget=allowed_budget,
+                )
+
+            self._session_spent += actual.actual_total_cost
+            if self._session_spent >= self._session_budget:
+                self._locked = True
+            self._fire_warning_if_needed()
+
+        return execution
+
+    async def generate_with_messages(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 1.0,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """
+        Async execute one call with chat messages within budget.
+        """
+        prompt_text = _extract_text_from_messages(messages)
+
+        async with self._lock:
+            if self._locked:
+                raise BudgetExceededError(
+                    f"Session budget exhausted (spent ${self._session_spent:.4f}, limit ${self._session_budget:.4f}). Client locked.",
+                    limit_type="session_locked",
+                    remaining_budget=0.0,
+                )
+
+            token_pred = self._provider.predict_tokens(
+                prompt_text, self._model, output_ratio=self._output_ratio
+            )
+            input_price_per_1k, output_price_per_1k = self._provider.get_pricing(self._model)
+
+            predicted_input_cost = (token_pred.input_tokens / 1000) * input_price_per_1k
+            predicted_output_cost = (token_pred.output_tokens / 1000) * output_price_per_1k
+            predicted_total_cost = predicted_input_cost + predicted_output_cost
+
+            if predicted_total_cost > self._per_call_budget:
+                raise BudgetExceededError(
+                    f"Predicted cost ${predicted_total_cost:.4f} exceeds per-call budget ${self._per_call_budget:.4f}",
+                    limit_type="per_call",
+                    remaining_budget=max(0.0, self._session_budget - self._session_spent),
+                    allowed_budget=self._per_call_budget,
+                )
+
+            remaining_session_budget = self._session_budget - self._session_spent
+            allowed_budget = min(self._per_call_budget, remaining_session_budget)
+
+            if allowed_budget <= 0:
+                self._locked = True
+                raise BudgetExceededError(
+                    "No remaining session budget.",
+                    limit_type="per_session",
+                    remaining_budget=0.0,
+                )
+
+            if predicted_input_cost >= allowed_budget:
+                raise BudgetExceededError(
+                    f"Predicted input cost ${predicted_input_cost:.4f} >= allowed budget ${allowed_budget:.4f}",
+                    limit_type="per_session",
+                    remaining_budget=remaining_session_budget,
+                )
+
+            max_output_tokens = _compute_budget_constrained_max_tokens(
+                predicted_input_cost, allowed_budget, output_price_per_1k
             )
 
-        self._session_spent += actual.actual_total_cost
+        # Execute outside the lock
+        execution = await self._provider.async_execute_with_messages(
+            messages,
+            self._model,
+            temperature=temperature,
+            max_tokens=max_output_tokens,
+            **kwargs,
+        )
 
-        if self._session_spent >= self._session_budget:
-            self._locked = True
+        if not execution.success:
+            return execution
+
+        actual = _actual_from_usage_and_pricing(
+            self._model,
+            execution.usage,
+            input_price_per_1k,
+            output_price_per_1k,
+        )
+
+        async with self._lock:
+            if actual.actual_total_cost > allowed_budget + BUDGET_ASSERTION_EPSILON:
+                raise BudgetViolationError(
+                    f"Budget invariant violated: actual cost ${actual.actual_total_cost:.6f} > allowed ${allowed_budget:.6f}",
+                    actual_cost=actual.actual_total_cost,
+                    allowed_budget=allowed_budget,
+                )
+
+            self._session_spent += actual.actual_total_cost
+            if self._session_spent >= self._session_budget:
+                self._locked = True
+            self._fire_warning_if_needed()
 
         return execution

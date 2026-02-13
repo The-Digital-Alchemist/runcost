@@ -5,7 +5,7 @@ Pricing (pricing.json anthropic slice) and token counting (API count_tokens or h
 
 import logging
 import os
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Any, Dict
 
 from costplan.core.provider import BaseProvider, TokenPrediction
 from costplan.core.executor import ExecutionResult
@@ -14,7 +14,7 @@ from costplan.config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# Strict mode: no client → raise. Non-strict: no client → allow heuristic fallback.
+# Strict mode: no client -> raise. Non-strict: no client -> allow heuristic fallback.
 STRICT_TOKEN_COUNT_DEFAULT = True
 
 
@@ -25,6 +25,30 @@ def _heuristic_tokens(text: str) -> int:
 
 def _has_api_key(api_key: Optional[str]) -> bool:
     return bool(api_key or os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def _extract_response_text(resp: Any) -> str:
+    """Extract text from Anthropic response content blocks."""
+    text = ""
+    if getattr(resp, "content", None):
+        for block in resp.content:
+            if getattr(block, "text", None):
+                text += block.text
+    return text
+
+
+def _extract_usage_dict(resp: Any) -> Dict[str, int]:
+    """Extract usage dict from Anthropic response, mapping to our standard format."""
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        inp = getattr(usage, "input_tokens", 0) or 0
+        out = getattr(usage, "output_tokens", 0) or 0
+        return {
+            "prompt_tokens": inp,
+            "completion_tokens": out,
+            "total_tokens": inp + out,
+        }
+    return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
 class AnthropicProvider(BaseProvider):
@@ -53,6 +77,7 @@ class AnthropicProvider(BaseProvider):
         self._settings = settings or Settings()
         self._strict_token_count = strict_token_count
         self._client = None  # Lazy init
+        self._async_client = None  # Lazy init
 
     def _get_client(self):
         """Lazy-init Anthropic client. Raises if no API key."""
@@ -72,6 +97,24 @@ class AnthropicProvider(BaseProvider):
             self._client = anthropic.Anthropic(api_key=key, timeout=self._timeout)
         return self._client
 
+    def _get_async_client(self):
+        """Lazy-init AsyncAnthropic client."""
+        if self._async_client is None:
+            try:
+                import anthropic
+            except ImportError as e:
+                raise ImportError(
+                    "anthropic package is required for AnthropicProvider. "
+                    "Install with: pip install anthropic"
+                ) from e
+            key = self._api_key or os.environ.get("ANTHROPIC_API_KEY")
+            if not key:
+                raise ValueError(
+                    "Anthropic API key not set. Use api_key= or ANTHROPIC_API_KEY."
+                )
+            self._async_client = anthropic.AsyncAnthropic(api_key=key, timeout=self._timeout)
+        return self._async_client
+
     def _count_input_tokens_via_api(self, prompt: str, model: str) -> int:
         """Call Anthropic count_tokens API. Raises on failure or missing client."""
         client = self._get_client()
@@ -87,7 +130,7 @@ class AnthropicProvider(BaseProvider):
         model: str,
         output_ratio: Optional[float] = None,
     ) -> TokenPrediction:
-        """Input tokens: from count_tokens() API when client exists; else strict → raise, non-strict → heuristic."""
+        """Input tokens: from count_tokens() API when client exists; else strict -> raise, non-strict -> heuristic."""
         if _has_api_key(self._api_key):
             try:
                 input_tokens = self._count_input_tokens_via_api(prompt, model)
@@ -148,28 +191,9 @@ class AnthropicProvider(BaseProvider):
                 error_message=str(e),
             )
 
-        # Map Anthropic usage to our ExecutionResult shape
-        usage = getattr(resp, "usage", None)
-        if usage is not None:
-            inp = getattr(usage, "input_tokens", 0) or 0
-            out = getattr(usage, "output_tokens", 0) or 0
-            usage_dict = {
-                "prompt_tokens": inp,
-                "completion_tokens": out,
-                "total_tokens": inp + out,
-            }
-        else:
-            usage_dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-
-        text = ""
-        if getattr(resp, "content", None):
-            for block in resp.content:
-                if getattr(block, "text", None):
-                    text += block.text
-
         return ExecutionResult(
-            response_text=text,
-            usage=usage_dict,
+            response_text=_extract_response_text(resp),
+            usage=_extract_usage_dict(resp),
             raw_response=resp,
             model=model,
             success=True,
@@ -212,27 +236,85 @@ class AnthropicProvider(BaseProvider):
                 error_message=str(e),
             )
 
-        usage = getattr(resp, "usage", None)
-        if usage is not None:
-            inp = getattr(usage, "input_tokens", 0) or 0
-            out = getattr(usage, "output_tokens", 0) or 0
-            usage_dict = {
-                "prompt_tokens": inp,
-                "completion_tokens": out,
-                "total_tokens": inp + out,
-            }
-        else:
-            usage_dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        return ExecutionResult(
+            response_text=_extract_response_text(resp),
+            usage=_extract_usage_dict(resp),
+            raw_response=resp,
+            model=model,
+            success=True,
+        )
 
-        text = ""
-        if getattr(resp, "content", None):
-            for block in resp.content:
-                if getattr(block, "text", None):
-                    text += block.text
+    # --- Native async methods ---
+
+    async def async_execute(
+        self,
+        prompt: str,
+        model: str,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Async execute via AsyncAnthropic."""
+        try:
+            client = self._get_async_client()
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=max_tokens or 1024,
+                temperature=temperature,
+                messages=[{"role": "user", "content": prompt}],
+                **kwargs,
+            )
+        except Exception as e:
+            logger.exception("Async Anthropic API error")
+            return ExecutionResult(
+                response_text="",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                raw_response=None,
+                model=model,
+                success=False,
+                error_message=str(e),
+            )
 
         return ExecutionResult(
-            response_text=text,
-            usage=usage_dict,
+            response_text=_extract_response_text(resp),
+            usage=_extract_usage_dict(resp),
+            raw_response=resp,
+            model=model,
+            success=True,
+        )
+
+    async def async_execute_with_messages(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Async execute with message list."""
+        try:
+            client = self._get_async_client()
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=max_tokens or 1024,
+                temperature=temperature,
+                messages=messages,
+                **kwargs,
+            )
+        except Exception as e:
+            logger.exception("Async Anthropic messages error")
+            return ExecutionResult(
+                response_text="",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                raw_response=None,
+                model=model,
+                success=False,
+                error_message=str(e),
+            )
+
+        return ExecutionResult(
+            response_text=_extract_response_text(resp),
+            usage=_extract_usage_dict(resp),
             raw_response=resp,
             model=model,
             success=True,

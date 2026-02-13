@@ -4,13 +4,16 @@ Pricing (pricing.json) and token estimation (tiktoken) are internal to this modu
 The core never opens pricing.json or uses TokenEstimator directly.
 """
 
-from typing import Optional, Tuple, List
+import logging
+from typing import Optional, Tuple, List, Any, Dict
 
 from costplan.core.provider import BaseProvider, TokenPrediction
 from costplan.core.executor import ProviderExecutor, ExecutionResult
 from costplan.core.estimator import TokenEstimator
 from costplan.core.pricing import PricingRegistry
 from costplan.config.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider(BaseProvider):
@@ -37,6 +40,10 @@ class OpenAIProvider(BaseProvider):
             token_estimator: Token estimation (tiktoken/heuristic; default if None)
             settings: Settings for default output ratio (default if None)
         """
+        self._api_key = api_key
+        self._base_url = base_url
+        self._organization = organization
+        self._timeout = timeout
         self._executor = ProviderExecutor(
             api_key=api_key,
             base_url=base_url,
@@ -50,6 +57,19 @@ class OpenAIProvider(BaseProvider):
             allow_heuristic_fallback=False,  # Production: provider-accurate tokenizer only
         )
         self._settings = settings or Settings()
+        self._async_client = None  # Lazy init
+
+    def _get_async_client(self):
+        """Lazy-init AsyncOpenAI client."""
+        if self._async_client is None:
+            from openai import AsyncOpenAI
+            self._async_client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                organization=self._organization,
+                timeout=self._timeout,
+            )
+        return self._async_client
 
     def predict_tokens(
         self,
@@ -96,3 +116,89 @@ class OpenAIProvider(BaseProvider):
         return self._executor.execute_with_messages(
             messages, model, temperature=temperature, max_tokens=max_tokens, **kwargs
         )
+
+    # --- Native async methods ---
+
+    async def async_execute(
+        self,
+        prompt: str,
+        model: str,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Async execute via AsyncOpenAI."""
+        try:
+            client = self._get_async_client()
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+            response_text = response.choices[0].message.content or ""
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            return ExecutionResult(
+                response_text=response_text,
+                usage=usage,
+                raw_response=response,
+                model=model,
+                success=True,
+            )
+        except Exception as e:
+            logger.error(f"Async OpenAI error: {e}")
+            return ExecutionResult(
+                response_text="",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                raw_response=None,
+                model=model,
+                success=False,
+                error_message=str(e),
+            )
+
+    async def async_execute_with_messages(
+        self,
+        messages: List[Dict[str, str]],
+        model: str,
+        temperature: float = 1.0,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any,
+    ) -> ExecutionResult:
+        """Async execute chat completion with messages."""
+        try:
+            client = self._get_async_client()
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs,
+            )
+            response_text = response.choices[0].message.content or ""
+            usage = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+            return ExecutionResult(
+                response_text=response_text,
+                usage=usage,
+                raw_response=response,
+                model=model,
+                success=True,
+            )
+        except Exception as e:
+            logger.error(f"Async OpenAI messages error: {e}")
+            return ExecutionResult(
+                response_text="",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                raw_response=None,
+                model=model,
+                success=False,
+                error_message=str(e),
+            )
