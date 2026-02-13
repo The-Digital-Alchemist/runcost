@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "costplan"
 version = "0.1.0"
-description = "Pre-execution cost prediction and post-execution cost measurement for LLM agent runs"
+description = "LLM Economic Circuit Breaker — deterministic budget enforcement for any LLM workflow"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
     { name = "CostPlan Team", email = "team@costplan.dev" }
 ]
-keywords = ["llm", "cost", "prediction", "openai", "ai", "tokens", "pricing"]
+keywords = ["llm", "cost", "budget", "openai", "anthropic", "claude", "tokens", "pricing", "circuit-breaker"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -39,6 +39,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+proxy = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
@@ -47,6 +52,9 @@ dev = [
     "ruff>=0.7.0",  # Modern linter + formatter
     "mypy>=1.13.0",
     "types-pyyaml>=6.0.12",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
 ]
 
 [project.urls]
