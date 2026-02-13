@@ -1,4 +1,7 @@
-"""CostPlan - LLM Cost Prediction and Measurement System."""
+"""CostPlan - LLM Economic Circuit Breaker.
+
+Deterministic budget enforcement for any LLM workflow.
+"""
 
 __version__ = "0.1.0"
 
@@ -17,6 +20,7 @@ from costplan.core.budget import (
     BudgetViolationError,
     BudgetedClient,
     BudgetedLLM,
+    AsyncBudgetedLLM,
 )
 from costplan.storage.tracker import RunTracker
 from costplan.config.settings import Settings
@@ -41,6 +45,7 @@ __all__ = [
     "BudgetViolationError",
     "BudgetedClient",
     "BudgetedLLM",
+    "AsyncBudgetedLLM",
     "RunTracker",
     "Settings",
 ]
