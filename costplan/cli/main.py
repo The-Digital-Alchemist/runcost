@@ -33,11 +33,13 @@ def cli(ctx, config):
 # Import and register commands
 from costplan.cli.predict import predict
 from costplan.cli.run import run, history, stats
+from costplan.cli.proxy_cmd import proxy
 
 cli.add_command(predict)
 cli.add_command(run)
 cli.add_command(history)
 cli.add_command(stats)
+cli.add_command(proxy)
 
 
 if __name__ == "__main__":
