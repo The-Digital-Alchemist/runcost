@@ -47,6 +47,10 @@
     "o1-mini": {
       "input_cost_per_1k_tokens": 0.003,
       "output_cost_per_1k_tokens": 0.012
+    },
+    "gpt-5.3": {
+      "input_cost_per_1k_tokens": 0.00175,
+      "output_cost_per_1k_tokens": 0.014
     }
   },
   "anthropic": {
@@ -103,6 +107,12 @@
       "output_cost_per_1k_tokens": 0.005,
       "cache_read_cost_per_1k_tokens": 0.0001,
       "cache_creation_cost_per_1k_tokens": 0.00125
+    },
+    "claude-opus-4-6-20260204": {
+      "input_cost_per_1k_tokens": 0.005,
+      "output_cost_per_1k_tokens": 0.025,
+      "cache_read_cost_per_1k_tokens": 0.0005,
+      "cache_creation_cost_per_1k_tokens": 0.00625
     }
   },
   "model_aliases": {
@@ -113,6 +123,7 @@
     "claude-haiku-4-5": "claude-haiku-4-5-20250514",
     "claude-haiku-4.5": "claude-haiku-4-5-20250514",
     "claude-3.5-sonnet": "claude-3-5-sonnet-20241022",
-    "claude-3.5-haiku": "claude-3-5-haiku-20241022"
-  }
+    "claude-3.5-haiku": "claude-3-5-haiku-20241022",
+    "claude-opus-4.6": "claude-opus-4-6-20260204"
+    }
 }
