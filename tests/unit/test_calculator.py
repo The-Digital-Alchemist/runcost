@@ -12,6 +12,10 @@ def mock_pricing_registry():
     """Create a mock pricing registry."""
     registry = Mock(spec=PricingRegistry)
     registry.get_model_pricing.return_value = (0.001, 0.002)  # $0.001/1K input, $0.002/1K output
+    registry.get_full_pricing.return_value = {
+        "input_cost_per_1k_tokens": 0.001,
+        "output_cost_per_1k_tokens": 0.002,
+    }
     return registry
 
 
