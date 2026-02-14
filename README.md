@@ -25,6 +25,8 @@ claude  # All API calls now budget-enforced. $5 session cap.
 
 When the budget runs out, the proxy returns `429` and Claude Code stops. That's it.
 
+Open [http://localhost:8080](http://localhost:8080) in your browser to see remaining budget and reset the session.
+
 ---
 
 ## Path A: SDK
@@ -126,11 +128,12 @@ export ANTHROPIC_BASE_URL=http://localhost:8080
 
 | Endpoint | Description |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI-compatible proxy |
-| `POST /v1/messages` | Anthropic-compatible proxy |
+| `GET /` | Dashboard (budget status page) |
+| `GET /health` | Health check |
 | `GET /v1/budget` | Query remaining budget |
 | `POST /v1/budget/reset` | Reset session budget |
-| `GET /health` | Health check |
+| `POST /v1/chat/completions` | OpenAI-compatible proxy |
+| `POST /v1/messages` | Anthropic-compatible proxy |
 
 ### What the proxy does
 
