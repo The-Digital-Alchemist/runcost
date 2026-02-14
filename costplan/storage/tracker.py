@@ -32,6 +32,10 @@ class RunTracker:
         # Initialize database
         self.db_manager.init_db()
 
+    def close(self) -> None:
+        """Release database connections. Call when done (e.g. in tests before deleting temp DB)."""
+        self.db_manager.dispose()
+
     def store_run(
         self,
         prediction: PredictionResult,

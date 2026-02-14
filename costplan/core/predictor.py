@@ -206,12 +206,12 @@ class CostPredictor:
             # No historical data, use default medium confidence
             return "Medium", None
 
-        # Calculate confidence based on error threshold
-        threshold = self.settings.confidence_threshold
+        # Calculate confidence based on error threshold (threshold is 0-1, error_percent is 0-100)
+        threshold_pct = self.settings.confidence_threshold * 100
 
-        if error_percent <= threshold * 0.5:
+        if abs(error_percent) <= threshold_pct * 0.5:
             return "High", error_percent
-        elif error_percent <= threshold:
+        elif abs(error_percent) <= threshold_pct:
             return "Medium", error_percent
         else:
             return "Low", error_percent

@@ -107,6 +107,10 @@ class DatabaseManager:
         """Create all database tables."""
         Base.metadata.create_all(bind=self.engine)
 
+    def dispose(self) -> None:
+        """Release all connections. Call before deleting the database file (e.g. in tests)."""
+        self.engine.dispose()
+
     def drop_all(self) -> None:
         """Drop all database tables (use with caution!)."""
         Base.metadata.drop_all(bind=self.engine)
