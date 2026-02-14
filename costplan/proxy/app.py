@@ -1,11 +1,12 @@
 """FastAPI proxy application with budget enforcement.
 
 Endpoints:
+    GET  /                     -- Dashboard (budget status page)
+    GET  /health               -- Health check
+    GET  /v1/budget            -- Query remaining budget
+    POST /v1/budget/reset       -- Reset session budget
     POST /v1/chat/completions  -- OpenAI-compatible proxy
     POST /v1/messages          -- Anthropic-compatible proxy (Claude Code)
-    GET  /v1/budget            -- Query remaining budget
-    POST /v1/budget/reset      -- Reset session budget
-    GET  /health               -- Health check
 """
 
 import json
@@ -14,7 +15,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from costplan.core.pricing import PricingRegistry, PricingNotFoundError
 from costplan.proxy.budget_state import ProxyBudgetState, ProxyBudgetExceeded
@@ -91,6 +92,174 @@ def create_app(
     async def reset_budget():
         await budget.reset()
         return {"status": "reset", "remaining": await budget.remaining()}
+
+    # --- Dashboard (minimal status page) ---
+
+    DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CostPlan — Budget status</title>
+  <style>
+    :root {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      line-height: 1.6;
+      --bg: #f1f5f9;
+      --card: #fff;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --border: #e2e8f0;
+      --remaining: #0ea5e9;
+      --ok: #22c55e;
+      --locked: #ef4444;
+      --btn-bg: #0f172a;
+      --btn-hover: #1e293b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --text: #f1f5f9;
+        --text-muted: #94a3b8;
+        --border: #334155;
+        --btn-bg: #38bdf8;
+        --btn-hover: #7dd3fc;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); padding: 2rem 1rem; }
+    .wrap { max-width: 22rem; margin: 0 auto; }
+    .header { margin-bottom: 1.5rem; }
+    .header h1 { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.02em; margin: 0; color: var(--text); }
+    .header p { font-size: 0.8125rem; color: var(--text-muted); margin: 0.25rem 0 0; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      .card { box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+    }
+    .progress-wrap { margin-bottom: 1.25rem; }
+    .progress-bar {
+      height: 8px;
+      background: var(--border);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: var(--remaining);
+      transition: width 0.3s ease;
+    }
+    .progress-fill.low { background: var(--locked); }
+    .progress-labels { display: flex; justify-content: space-between; font-size: 0.8125rem; margin-top: 0.5rem; color: var(--text-muted); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1.5rem; }
+    .stat { min-width: 0; }
+    .stat .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: block; margin-bottom: 0.125rem; }
+    .stat .value { font-size: 1rem; font-weight: 600; }
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+    }
+    .badge.ok { background: rgba(34, 197, 94, 0.15); color: var(--ok); }
+    .badge.locked { background: rgba(239, 68, 68, 0.15); color: var(--locked); }
+    @media (prefers-color-scheme: dark) {
+      .badge.ok { background: rgba(34, 197, 94, 0.2); }
+      .badge.locked { background: rgba(239, 68, 68, 0.2); }
+    }
+    .actions { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    button {
+      padding: 0.5rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      background: var(--btn-bg);
+      color: #fff;
+      transition: background 0.15s ease;
+    }
+    @media (prefers-color-scheme: dark) { button { color: #0f172a; } }
+    button:hover { background: var(--btn-hover); }
+    button:active { transform: scale(0.98); }
+    #toast { font-size: 0.8125rem; color: var(--ok); margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="header">
+      <h1>CostPlan</h1>
+      <p>Budget status — refreshes every 5s</p>
+    </header>
+    <div class="card">
+      <div class="progress-wrap">
+        <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+          <div id="progress_fill" class="progress-fill" style="width: 100%"></div>
+        </div>
+        <div class="progress-labels">
+          <span id="remaining_label">$0.00 remaining</span>
+          <span id="session_budget">—</span>
+        </div>
+      </div>
+      <div class="grid">
+        <div class="stat"><span class="label">Spent</span><span id="spent" class="value">—</span></div>
+        <div class="stat"><span class="label">Calls</span><span id="call_count" class="value">—</span></div>
+        <div class="stat"><span class="label">Circuit</span><span id="locked" class="value">—</span></div>
+      </div>
+      <div class="actions">
+        <button id="reset_btn">Reset session</button>
+        <div id="toast"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    function fmt(n) { return typeof n === "number" ? "$" + n.toFixed(2) : n; }
+    function render(data) {
+      var pct = data.session_budget > 0 ? (data.remaining / data.session_budget) * 100 : 100;
+      var fill = document.getElementById("progress_fill");
+      fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      fill.classList.toggle("low", pct < 15);
+      document.getElementById("remaining_label").textContent = fmt(data.remaining) + " remaining";
+      document.getElementById("session_budget").textContent = "of " + fmt(data.session_budget);
+      document.getElementById("spent").textContent = fmt(data.total_spent);
+      document.getElementById("call_count").textContent = data.call_count;
+      var el = document.getElementById("locked");
+      el.textContent = data.locked ? "Locked" : "OK";
+      el.className = "badge " + (data.locked ? "locked" : "ok");
+    }
+    function fetchBudget() {
+      fetch("/v1/budget").then(function(r) { return r.json(); }).then(render).catch(function() {
+        document.getElementById("remaining_label").textContent = "Error loading";
+      });
+    }
+    document.addEventListener("DOMContentLoaded", function() {
+      fetchBudget();
+      setInterval(fetchBudget, 5000);
+      document.getElementById("reset_btn").addEventListener("click", function() {
+        fetch("/v1/budget/reset", { method: "POST" }).then(function(r) { return r.json(); }).then(function() {
+          fetchBudget();
+          var t = document.getElementById("toast");
+          t.textContent = "Session reset.";
+          setTimeout(function() { t.textContent = ""; }, 2000);
+        });
+      });
+    });
+  </script>
+</body>
+</html>
+"""
+
+    @app.get("/")
+    async def dashboard():
+        return HTMLResponse(DASHBOARD_HTML)
 
     # --- OpenAI-compatible proxy ---
 

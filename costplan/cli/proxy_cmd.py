@@ -57,6 +57,14 @@ def proxy(port, host, per_call, session_budget, target_openai, target_anthropic,
         )
         raise SystemExit(1)
 
+    if per_call > session_budget:
+        click.echo(
+            f"Error: Per-call budget (${per_call:.2f}) cannot exceed session budget (${session_budget:.2f}).\n"
+            "  No single call can cost more than the session total.",
+            err=True,
+        )
+        raise SystemExit(1)
+
     from costplan.proxy.budget_state import ProxyBudgetState
     from costplan.proxy.forwarder import Forwarder
     from costplan.proxy.app import create_app
@@ -74,6 +82,7 @@ def proxy(port, host, per_call, session_budget, target_openai, target_anthropic,
     click.echo()
     click.echo(f"  Claude Code:  export ANTHROPIC_BASE_URL=http://{host}:{port}")
     click.echo(f"  OpenAI:       export OPENAI_BASE_URL=http://{host}:{port}/v1")
+    click.echo(f"  Dashboard:    http://{host}:{port}/")
     click.echo()
 
     uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
