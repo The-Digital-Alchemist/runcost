@@ -124,6 +124,8 @@
     "claude-haiku-4.5": "claude-haiku-4-5-20250514",
     "claude-3.5-sonnet": "claude-3-5-sonnet-20241022",
     "claude-3.5-haiku": "claude-3-5-haiku-20241022",
-    "claude-opus-4.6": "claude-opus-4-6-20260204"
+    "claude-opus-4.6": "claude-opus-4-6-20260204",
+    "claude-opus-4-6": "claude-opus-4-6-20260204"
+
     }
 }
