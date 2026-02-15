@@ -8,24 +8,37 @@ Two integration paths. No complex setup. Just enforcement.
 
 ---
 
+## Prerequisites
+
+- **Python 3.10+**
+- **API key**: Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in your environment (or in the shell where you run the wrapped command). CostPlan does not store keys; the proxy forwards them to the provider.
+
+---
+
 ## Claude Code Quickstart
 
-Claude Code is the single largest money sink in AI tooling. CostPlan stops the bleed:
+Claude Code is the single largest money sink in AI tooling. CostPlan stops the bleed — **one command**:
 
 ```bash
 pip install costplan[proxy]
+costplan wrap --per-call 1.00 --session 5.00 claude
+```
 
+The proxy starts, Claude Code launches with budget enforcement, and when you exit you get a cost summary. Open [http://localhost:8080](http://localhost:8080) while it's running to see remaining budget and reset the session.
+
+<details>
+<summary>Or use two terminals (manual proxy mode)</summary>
+
+```bash
 # Terminal 1: Start the circuit breaker
 costplan proxy --per-call 1.00 --session 5.00
 
 # Terminal 2: Use Claude Code with budget enforcement
 export ANTHROPIC_BASE_URL=http://localhost:8080
-claude  # All API calls now budget-enforced. $5 session cap.
+claude
 ```
 
-When the budget runs out, the proxy returns `429` and Claude Code stops. That's it.
-
-Open [http://localhost:8080](http://localhost:8080) in your browser to see remaining budget and reset the session.
+</details>
 
 ---
 
@@ -188,14 +201,18 @@ pip install -e ".[dev]"
 ## CLI
 
 ```bash
+# Wrap any command with budget enforcement (one-liner)
+costplan wrap --per-call 1.00 --session 5.00 claude
+costplan wrap --per-call 0.50 --session 10.00 python my_agent.py
+
+# Start budget enforcement proxy (manual two-terminal mode)
+costplan proxy --per-call 1.00 --session 5.00
+
 # Predict cost (no API call)
 costplan predict "Your prompt" --provider openai --model gpt-4o
 
 # Execute and compare predicted vs actual
 costplan run "Your prompt" --provider anthropic --model claude-sonnet-4-20250514
-
-# Start budget enforcement proxy
-costplan proxy --per-call 1.00 --session 5.00
 
 # View history
 costplan history
