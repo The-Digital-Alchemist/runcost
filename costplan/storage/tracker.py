@@ -41,7 +41,7 @@ class RunTracker:
         prediction: PredictionResult,
         actual: Optional[ActualCostResult] = None,
         model: Optional[str] = None,
-    ) -> str:
+    ) -> Run:
         """Store a run record with prediction and actual data.
 
         Args:
@@ -50,7 +50,7 @@ class RunTracker:
             model: Model name (uses prediction.model if None)
 
         Returns:
-            Created run ID (str)
+            Created Run object
         """
         model_name = model or prediction.model
 
@@ -63,18 +63,23 @@ class RunTracker:
             )
 
         # Create run record
-        run_id = self.db_manager.create_run(
-            model=model_name,
-            predicted_input_tokens=prediction.predicted_input_tokens,
-            predicted_output_tokens=prediction.predicted_output_tokens,
-            predicted_cost=prediction.predicted_total_cost,
-            actual_input_tokens=actual.actual_input_tokens if actual else None,
-            actual_output_tokens=actual.actual_output_tokens if actual else None,
-            actual_cost=actual.actual_total_cost if actual else None,
-            error_percent=error_percent,
-        )
+        with self.db_manager.get_session() as session:
+            run = Run(
+                model=model_name,
+                predicted_input_tokens=prediction.predicted_input_tokens,
+                predicted_output_tokens=prediction.predicted_output_tokens,
+                predicted_cost=prediction.predicted_total_cost,
+                actual_input_tokens=actual.actual_input_tokens if actual else None,
+                actual_output_tokens=actual.actual_output_tokens if actual else None,
+                actual_cost=actual.actual_total_cost if actual else None,
+                error_percent=error_percent,
+            )
+            session.add(run)
+            session.commit()
+            session.refresh(run)
+            session.expunge(run)
 
-        return run_id
+        return run
 
     def get_recent_runs(
         self,

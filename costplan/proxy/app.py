@@ -403,12 +403,11 @@ def create_app(
         messages = body.get("messages", [])
         is_stream = body.get("stream", False)
 
+        logger.info("Anthropic request: model=%s stream=%s", model, is_stream)
+
         # Pre-check: estimate cost
-        try:
-            text_len = _extract_text_length(messages)
-            estimated_cost = heuristic_input_cost_estimate(text_len, model, _anthropic_pricing)
-        except PricingNotFoundError:
-            estimated_cost = 0.0
+        text_len = _extract_text_length(messages)
+        estimated_cost = heuristic_input_cost_estimate(text_len, model, _anthropic_pricing)
 
         try:
             await budget.pre_check(estimated_cost)

@@ -139,7 +139,12 @@ def wrap(per_call, session_budget, port, command):
     # --- Cost summary ------------------------------------------------------
     import asyncio
 
-    stats = asyncio.get_event_loop().run_until_complete(budget.stats())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        stats = loop.run_until_complete(budget.stats())
+    finally:
+        loop.close()
 
     click.echo()
     click.echo("CostPlan — Session summary")

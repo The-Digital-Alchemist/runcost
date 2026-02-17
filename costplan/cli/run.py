@@ -192,7 +192,8 @@ def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
     )
 
     # Step 4: Store run data
-    run_id = tracker.store_run(prediction, actual, model)
+    run = tracker.store_run(prediction, actual, model)
+    run_id = run.id
 
     # Step 5: Display comparison with Rich
     console.print("\n")
