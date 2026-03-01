@@ -2,7 +2,9 @@
 
 **Deterministic economics for probabilistic systems.**
 
-CostPlan is an LLM Economic Circuit Breaker. It enforces hard per-call and per-session budget limits on any LLM workflow — so your agent loop doesn't blow up, your CI job doesn't burn $800, and your automation is safe to deploy.
+CostPlan is a deterministic budget enforcement layer for production LLM and agent systems. It prevents runaway spend by enforcing hard per-call and per-session ceilings before and after execution.
+
+*v0.1 — Deterministic LLM Budget Enforcement for Agent Systems*
 
 Two integration paths. No complex setup. Just enforcement.
 
@@ -25,6 +27,64 @@ costplan wrap --per-call 1.00 --session 5.00 claude
 ```
 
 The proxy starts, Claude Code launches with budget enforcement, and when you exit you get a cost summary. Open [http://localhost:8080](http://localhost:8080) while it's running to see remaining budget and reset the session.
+
+---
+
+## OpenClaw Quickstart
+
+OpenClaw is a 24/7 AI gateway (WhatsApp, Telegram, Discord, etc.). Unlike Claude Code, it runs indefinitely — "fire and forget." CostPlan integrates by running the proxy in front of OpenClaw's LLM calls.
+
+**Two-process setup:**
+
+```bash
+# Terminal 1: Start CostPlan proxy (long-running)
+costplan proxy --per-call 1.00 --session 50.00 --reset-every 24h
+
+# Terminal 2: Run OpenClaw with budget enforcement
+export ANTHROPIC_BASE_URL=http://localhost:8080
+openclaw gateway --port 18789
+```
+
+Or use `costplan openclaw` to start the proxy and print the env setup in one step:
+
+```bash
+costplan openclaw --per-call 1.00 --session 50.00 --reset-every 24h
+# Then in another terminal: export ANTHROPIC_BASE_URL=... && openclaw gateway
+```
+
+**OpenClaw config alternative** (custom provider in `~/.openclaw/openclaw.json`):
+
+```json5
+{
+  models: {
+    mode: "merge",
+    providers: {
+      costplan: {
+        baseUrl: "http://localhost:8080",
+        apiKey: "${ANTHROPIC_API_KEY}",
+        api: "anthropic-messages",
+        models: [
+          { id: "claude-sonnet-4-20250514", name: "Claude Sonnet" },
+          { id: "claude-opus-4-20250514", name: "Claude Opus" },
+        ],
+      },
+    },
+  },
+  agents: { defaults: { model: { primary: "costplan/claude-sonnet-4-20250514" } } },
+}
+```
+
+**Automatic budget reset**: Use `--reset-every 24h` so the session budget renews daily without manual reset. Or schedule a cron job to reset at midnight:
+
+```bash
+0 0 * * * curl -s -X POST http://localhost:8080/v1/budget/reset
+```
+
+**Rolling window (survives restarts)**: Use `--state-db` and `--budget-window` for a persistent rolling budget that survives proxy restarts:
+
+```bash
+costplan proxy --per-call 2.00 --session 20.00 --state-db ~/.costplan/budget.db --budget-window 24h
+```
 
 <details>
 <summary>Or use two terminals (manual proxy mode)</summary>
@@ -156,9 +216,25 @@ export ANTHROPIC_BASE_URL=http://localhost:8080
 - **Post-track**: Records actual cost after each call. Locks the session when budget is exhausted.
 - **Headers**: Adds `X-CostPlan-Budget-Remaining` and `X-CostPlan-Cost` to every response.
 
+**Concurrency**: Budget state is protected by an asyncio lock; pre-check and record are atomic. Safe for parallel agents, multi-request streams, and concurrent clients hitting the same proxy.
+
 ---
 
 ## How It Works
+
+```
+                    ┌─────────────────────────────────────────┐
+   Client  ────────►│  CostPlan Proxy                         │
+ (Claude,           │  ┌─────────────────┐  ┌──────────────┐ │
+  OpenClaw,         │  │ budget engine   │  │ reservation  │ │
+  agents)           │  │ (pre/post check)│  │ ledger       │ │
+                    │  └─────────────────┘  └──────────────┘ │
+                    └──────────────────────┬─────────────────┘
+                                           │
+                                           ▼
+                                    Provider API
+                               (Anthropic, OpenAI)
+```
 
 ```
 LLMs are non-deterministic, recursive, parallelizable, capable of runaway loops.
@@ -171,6 +247,16 @@ CostPlan closes that gap.
 - **Session limit**: Total spend is tracked. When `session_budget` is exhausted, the client locks.
 - **Dynamic max_tokens**: Output token limit is derived from remaining budget so the call stays within bounds.
 - **Post-execution assertion**: If actual cost exceeds allowed budget (pricing drift, rounding), `BudgetViolationError` is raised.
+
+---
+
+## Known Limitations
+
+| Limitation | Notes |
+|------------|-------|
+| **Static pricing table** | Model pricing is loaded from `pricing.json`. Auto-sync with provider rate cards is planned. |
+| **Client routing required** | Proxy enforcement assumes clients route LLM traffic via `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`. Direct-to-provider calls bypass CostPlan. |
+| **Single-node scope** | Distributed multi-instance coordination is not supported. One proxy = one budget envelope. |
 
 ---
 
@@ -207,6 +293,9 @@ costplan wrap --per-call 0.50 --session 10.00 python my_agent.py
 
 # Start budget enforcement proxy (manual two-terminal mode)
 costplan proxy --per-call 1.00 --session 5.00
+
+# OpenClaw integration: proxy with auto-reset for 24/7 VA use
+costplan openclaw --per-call 1.00 --session 50.00 --reset-every 24h
 
 # Predict cost (no API call)
 costplan predict "Your prompt" --provider openai --model gpt-4o
