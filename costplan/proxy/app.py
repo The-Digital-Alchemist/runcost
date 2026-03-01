@@ -133,6 +133,7 @@ def create_app(
     .header { margin-bottom: 1.5rem; }
     .header h1 { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.02em; margin: 0; color: var(--text); }
     .header p { font-size: 0.8125rem; color: var(--text-muted); margin: 0.25rem 0 0; }
+    .reset-info { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -198,6 +199,7 @@ def create_app(
     <header class="header">
       <h1>CostPlan</h1>
       <p>Budget status — refreshes every 5s</p>
+      <p id="reset_info" class="reset-info"></p>
     </header>
     <div class="card">
       <div class="progress-wrap">
@@ -222,6 +224,12 @@ def create_app(
   </div>
   <script>
     function fmt(n) { return typeof n === "number" ? "$" + n.toFixed(2) : n; }
+    function fmtReset(sec) {
+      if (sec >= 86400) return (sec / 86400).toFixed(1) + "d";
+      if (sec >= 3600) return (sec / 3600).toFixed(1) + "h";
+      if (sec >= 60) return (sec / 60).toFixed(1) + "m";
+      return sec + "s";
+    }
     function render(data) {
       var pct = data.session_budget > 0 ? (data.remaining / data.session_budget) * 100 : 100;
       var fill = document.getElementById("progress_fill");
@@ -234,6 +242,15 @@ def create_app(
       var el = document.getElementById("locked");
       el.textContent = data.locked ? "Locked" : "OK";
       el.className = "badge " + (data.locked ? "locked" : "ok");
+      var ri = document.getElementById("reset_info");
+      if (data.budget_window_seconds) {
+        ri.textContent = "Rolling window: " + fmtReset(data.budget_window_seconds);
+      } else if (data.reset_every_seconds) {
+        var next = data.next_reset_at ? new Date(data.next_reset_at * 1000).toLocaleTimeString() : "";
+        ri.textContent = "Resets every " + fmtReset(data.reset_every_seconds) + (next ? " • Next: " + next : "");
+      } else {
+        ri.textContent = "";
+      }
     }
     function fetchBudget() {
       fetch("/v1/budget").then(function(r) { return r.json(); }).then(render).catch(function() {

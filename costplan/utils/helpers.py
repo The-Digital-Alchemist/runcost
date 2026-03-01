@@ -1,7 +1,33 @@
 """Utility functions and helpers."""
 
+import re
 from pathlib import Path
 from typing import Optional
+
+
+def parse_duration_seconds(s: str) -> float:
+    """Parse duration string (e.g. 24h, 7d, 30d) to seconds.
+
+    Supports: s (seconds), m (minutes), h (hours), d (days).
+
+    Args:
+        s: Duration string like "24h", "7d", "1.5h"
+
+    Returns:
+        Duration in seconds
+
+    Raises:
+        ValueError: If format is invalid
+    """
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*([smhd])\s*$", s.strip().lower())
+    if not m:
+        raise ValueError(
+            f"Invalid duration: {s!r}. Use format like 24h, 7d, 30m, 60s"
+        )
+    value = float(m.group(1))
+    unit = m.group(2)
+    multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    return value * multipliers[unit]
 
 
 def read_prompt_from_file(file_path: str) -> str:
