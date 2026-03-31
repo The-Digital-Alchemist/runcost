@@ -5,12 +5,12 @@ Pricing (pricing.json anthropic slice) and token counting (API count_tokens or h
 
 import logging
 import os
-from typing import Optional, Tuple, List, Any, Dict
+from typing import Any
 
-from costplan.core.provider import BaseProvider, TokenPrediction
+from costplan.config.settings import Settings
 from costplan.core.executor import ExecutionResult
 from costplan.core.pricing import PricingRegistry
-from costplan.config.settings import Settings
+from costplan.core.provider import BaseProvider, TokenPrediction
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def _heuristic_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _has_api_key(api_key: Optional[str]) -> bool:
+def _has_api_key(api_key: str | None) -> bool:
     return bool(api_key or os.environ.get("ANTHROPIC_API_KEY"))
 
 
@@ -37,7 +37,7 @@ def _extract_response_text(resp: Any) -> str:
     return text
 
 
-def _extract_usage_dict(resp: Any) -> Dict[str, int]:
+def _extract_usage_dict(resp: Any) -> dict[str, int]:
     """Extract usage dict from Anthropic response, mapping to our standard format."""
     usage = getattr(resp, "usage", None)
     if usage is not None:
@@ -56,10 +56,10 @@ class AnthropicProvider(BaseProvider):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         timeout: float = 60.0,
-        pricing_registry: Optional[PricingRegistry] = None,
-        settings: Optional[Settings] = None,
+        pricing_registry: PricingRegistry | None = None,
+        settings: Settings | None = None,
         strict_token_count: bool = STRICT_TOKEN_COUNT_DEFAULT,
     ):
         """Initialize the Anthropic provider.
@@ -91,9 +91,7 @@ class AnthropicProvider(BaseProvider):
                 ) from e
             key = self._api_key or os.environ.get("ANTHROPIC_API_KEY")
             if not key:
-                raise ValueError(
-                    "Anthropic API key not set. Use api_key= or ANTHROPIC_API_KEY."
-                )
+                raise ValueError("Anthropic API key not set. Use api_key= or ANTHROPIC_API_KEY.")
             self._client = anthropic.Anthropic(api_key=key, timeout=self._timeout)
         return self._client
 
@@ -109,9 +107,7 @@ class AnthropicProvider(BaseProvider):
                 ) from e
             key = self._api_key or os.environ.get("ANTHROPIC_API_KEY")
             if not key:
-                raise ValueError(
-                    "Anthropic API key not set. Use api_key= or ANTHROPIC_API_KEY."
-                )
+                raise ValueError("Anthropic API key not set. Use api_key= or ANTHROPIC_API_KEY.")
             self._async_client = anthropic.AsyncAnthropic(api_key=key, timeout=self._timeout)
         return self._async_client
 
@@ -128,7 +124,7 @@ class AnthropicProvider(BaseProvider):
         self,
         prompt: str,
         model: str,
-        output_ratio: Optional[float] = None,
+        output_ratio: float | None = None,
     ) -> TokenPrediction:
         """Input tokens: from count_tokens() API when client exists; else strict -> raise, non-strict -> heuristic."""
         if _has_api_key(self._api_key):
@@ -136,9 +132,7 @@ class AnthropicProvider(BaseProvider):
                 input_tokens = self._count_input_tokens_via_api(prompt, model)
             except Exception as e:
                 if self._strict_token_count:
-                    raise RuntimeError(
-                        f"Anthropic count_tokens failed (strict mode). {e}"
-                    ) from e
+                    raise RuntimeError(f"Anthropic count_tokens failed (strict mode). {e}") from e
                 logger.warning("count_tokens failed, falling back to heuristic: %s", e)
                 input_tokens = _heuristic_tokens(prompt)
         else:
@@ -158,7 +152,7 @@ class AnthropicProvider(BaseProvider):
         prompt: str,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs,
     ) -> ExecutionResult:
         """Execute via Anthropic Messages API."""
@@ -199,11 +193,11 @@ class AnthropicProvider(BaseProvider):
             success=True,
         )
 
-    def get_pricing(self, model: str) -> Tuple[float, float]:
+    def get_pricing(self, model: str) -> tuple[float, float]:
         """Return (input $/1k, output $/1k) from internal pricing registry."""
         return self._pricing.get_model_pricing(model)
 
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         """Return model names from internal pricing (anthropic slice)."""
         return self._pricing.list_supported_models()
 
@@ -212,7 +206,7 @@ class AnthropicProvider(BaseProvider):
         messages: list,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs,
     ) -> ExecutionResult:
         """Execute with message list (Anthropic format)."""
@@ -251,7 +245,7 @@ class AnthropicProvider(BaseProvider):
         prompt: str,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Async execute via AsyncAnthropic."""
@@ -285,10 +279,10 @@ class AnthropicProvider(BaseProvider):
 
     async def async_execute_with_messages(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Async execute with message list."""

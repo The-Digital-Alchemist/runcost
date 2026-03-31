@@ -2,7 +2,6 @@
 
 import re
 from pathlib import Path
-from typing import Optional
 
 
 def parse_duration_seconds(s: str) -> float:
@@ -21,9 +20,7 @@ def parse_duration_seconds(s: str) -> float:
     """
     m = re.match(r"^(\d+(?:\.\d+)?)\s*([smhd])\s*$", s.strip().lower())
     if not m:
-        raise ValueError(
-            f"Invalid duration: {s!r}. Use format like 24h, 7d, 30m, 60s"
-        )
+        raise ValueError(f"Invalid duration: {s!r}. Use format like 24h, 7d, 30m, 60s")
     value = float(m.group(1))
     unit = m.group(2)
     multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -46,7 +43,7 @@ def read_prompt_from_file(file_path: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    with open(path, "r", encoding="utf-8") as f:
+    with path.open(encoding="utf-8") as f:
         return f.read()
 
 
@@ -106,12 +103,7 @@ def get_confidence_emoji(confidence: str) -> str:
     return emoji_map.get(confidence, "⚪")
 
 
-def format_box(
-    content: dict,
-    title: str,
-    width: int = 40,
-    use_unicode: bool = True
-) -> str:
+def format_box(content: dict, title: str, width: int = 40, use_unicode: bool = True) -> str:
     """Format content in a box with unicode borders.
 
     Args:
@@ -165,4 +157,4 @@ def truncate_text(text: str, max_length: int = 100) -> str:
     """
     if len(text) <= max_length:
         return text
-    return text[:max_length - 3] + "..."
+    return text[: max_length - 3] + "..."

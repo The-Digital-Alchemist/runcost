@@ -1,14 +1,13 @@
 """Run tracking and calibration data management."""
 
 import statistics
-from typing import Optional, List, Dict
 
-from sqlalchemy import func, and_
+from sqlalchemy import and_, func
 
-from costplan.storage.database import DatabaseManager, Run, CalibrationMetadata
-from costplan.core.predictor import PredictionResult
-from costplan.core.calculator import ActualCostResult, calculate_error_percent
 from costplan.config.settings import Settings
+from costplan.core.calculator import ActualCostResult, calculate_error_percent
+from costplan.core.predictor import PredictionResult
+from costplan.storage.database import CalibrationMetadata, DatabaseManager, Run
 
 
 class RunTracker:
@@ -16,8 +15,8 @@ class RunTracker:
 
     def __init__(
         self,
-        database_manager: Optional[DatabaseManager] = None,
-        settings: Optional[Settings] = None,
+        database_manager: DatabaseManager | None = None,
+        settings: Settings | None = None,
     ):
         """Initialize the run tracker.
 
@@ -39,8 +38,8 @@ class RunTracker:
     def store_run(
         self,
         prediction: PredictionResult,
-        actual: Optional[ActualCostResult] = None,
-        model: Optional[str] = None,
+        actual: ActualCostResult | None = None,
+        model: str | None = None,
     ) -> Run:
         """Store a run record with prediction and actual data.
 
@@ -81,11 +80,7 @@ class RunTracker:
 
         return run
 
-    def get_recent_runs(
-        self,
-        limit: int = 10,
-        model: Optional[str] = None
-    ) -> List[Run]:
+    def get_recent_runs(self, limit: int = 10, model: str | None = None) -> list[Run]:
         """Get recent runs.
 
         Args:
@@ -106,7 +101,7 @@ class RunTracker:
             session.expunge_all()
             return runs
 
-    def get_error_stats(self, model: Optional[str] = None) -> Dict[str, float]:
+    def get_error_stats(self, model: str | None = None) -> dict[str, float]:
         """Get error statistics.
 
         Args:
@@ -143,10 +138,8 @@ class RunTracker:
             }
 
     def get_rolling_error_average(
-        self,
-        model: str,
-        window: Optional[int] = None
-    ) -> Optional[float]:
+        self, model: str, window: int | None = None
+    ) -> float | None:
         """Get rolling average error for a model.
 
         Args:
@@ -174,10 +167,8 @@ class RunTracker:
             return statistics.mean(errors)
 
     def get_calibration_data(
-        self,
-        model: str,
-        token_bucket: Optional[str] = None
-    ) -> Optional[Dict]:
+        self, model: str, token_bucket: str | None = None
+    ) -> dict | None:
         """Get calibration data for a model.
 
         Args:
@@ -188,9 +179,7 @@ class RunTracker:
             Dict with calibration metadata or None
         """
         with self.db_manager.get_session() as session:
-            query = session.query(CalibrationMetadata).filter(
-                CalibrationMetadata.model == model
-            )
+            query = session.query(CalibrationMetadata).filter(CalibrationMetadata.model == model)
 
             if token_bucket:
                 query = query.filter(CalibrationMetadata.token_bucket == token_bucket)
@@ -217,7 +206,7 @@ class RunTracker:
         avg_error: float,
         std_dev: float,
         sample_count: int,
-        learned_output_ratio: Optional[float] = None,
+        learned_output_ratio: float | None = None,
     ) -> CalibrationMetadata:
         """Update or create calibration metadata.
 
@@ -278,7 +267,7 @@ class RunTracker:
         with self.db_manager.get_session() as session:
             return session.query(func.count(Run.id)).scalar()
 
-    def get_total_cost(self, model: Optional[str] = None) -> float:
+    def get_total_cost(self, model: str | None = None) -> float:
         """Get total actual cost across all runs.
 
         Args:

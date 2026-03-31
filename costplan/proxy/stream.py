@@ -7,8 +7,7 @@ for accurate cost tracking.
 
 import json
 import logging
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StreamUsage:
     """Aggregated usage from an SSE stream."""
+
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
@@ -40,7 +40,7 @@ class SSEParser:
 
     def __init__(self) -> None:
         self._buffer = ""
-        self._current_event: Optional[str] = None
+        self._current_event: str | None = None
         self._current_data: list[str] = []
         self.usage = StreamUsage()
 
@@ -61,7 +61,7 @@ class SSEParser:
 
     def _parse_event_block(self, block: str) -> None:
         """Parse a single SSE event block."""
-        event_type: Optional[str] = None
+        event_type: str | None = None
         data_lines: list[str] = []
 
         for line in block.split("\n"):
@@ -84,7 +84,7 @@ class SSEParser:
 
         self._handle_event(event_type, data)
 
-    def _handle_event(self, event_type: Optional[str], data: dict) -> None:
+    def _handle_event(self, event_type: str | None, data: dict) -> None:
         """Extract usage information from parsed SSE events."""
         msg_type = data.get("type", "")
 

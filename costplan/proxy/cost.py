@@ -7,7 +7,7 @@ a model isn't in the pricing registry so budget tracking is never skipped.
 
 import logging
 
-from costplan.core.pricing import PricingRegistry, PricingNotFoundError
+from costplan.core.pricing import PricingNotFoundError, PricingRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ _ANTHROPIC_FALLBACK = {
     "cache_read_cost_per_1k_tokens": 0.0015,
     "cache_creation_cost_per_1k_tokens": 0.01875,
 }
-_OPENAI_FALLBACK_INPUT = 0.03   # GPT-4 tier
+_OPENAI_FALLBACK_INPUT = 0.03  # GPT-4 tier
 _OPENAI_FALLBACK_OUTPUT = 0.06
 
 
@@ -99,7 +99,8 @@ def compute_openai_cost(
         input_price, output_price = pricing.get_model_pricing(model)
     except PricingNotFoundError:
         logger.debug(
-            "Model %r not in pricing registry — using GPT-4 fallback pricing.", model,
+            "Model %r not in pricing registry — using GPT-4 fallback pricing.",
+            model,
         )
         input_price, output_price = _OPENAI_FALLBACK_INPUT, _OPENAI_FALLBACK_OUTPUT
 

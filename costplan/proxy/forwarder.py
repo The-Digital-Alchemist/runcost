@@ -4,7 +4,6 @@ Uses httpx.AsyncClient for non-blocking request forwarding with streaming suppor
 """
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -36,7 +35,7 @@ class Forwarder:
         self._openai_target = openai_target.rstrip("/")
         self._anthropic_target = anthropic_target.rstrip("/")
         self._timeout = timeout
-        self._client: Optional[httpx.AsyncClient] = None
+        self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazy-init the httpx async client."""
@@ -47,12 +46,9 @@ class Forwarder:
             )
         return self._client
 
-    def _build_headers(self, original_headers: dict, extra_headers: Optional[dict] = None) -> dict:
+    def _build_headers(self, original_headers: dict, extra_headers: dict | None = None) -> dict:
         """Build forwarded headers, stripping proxy-specific ones."""
-        headers = {
-            k: v for k, v in original_headers.items()
-            if k.lower() not in STRIP_HEADERS
-        }
+        headers = {k: v for k, v in original_headers.items() if k.lower() not in STRIP_HEADERS}
         if extra_headers:
             headers.update(extra_headers)
         return headers
@@ -81,7 +77,10 @@ class Forwarder:
 
         if stream:
             req = client.build_request(
-                "POST", url, content=body, headers=fwd_headers,
+                "POST",
+                url,
+                content=body,
+                headers=fwd_headers,
             )
             return await client.send(req, stream=True)
         else:
@@ -111,7 +110,10 @@ class Forwarder:
 
         if stream:
             req = client.build_request(
-                "POST", url, content=body, headers=fwd_headers,
+                "POST",
+                url,
+                content=body,
+                headers=fwd_headers,
             )
             return await client.send(req, stream=True)
         else:

@@ -7,15 +7,17 @@ remaining budget. Thread-safe (BudgetedLLM) and asyncio-safe (AsyncBudgetedLLM).
 """
 
 import asyncio
+import contextlib
 import threading
-from typing import Optional, List, Dict, Any, Callable, TYPE_CHECKING, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Union
 
+from costplan.core.calculator import ActualCostResult
 from costplan.core.executor import ExecutionResult
 from costplan.core.predictor import (
     PredictionResult,
     build_prediction_result_from_tokens_and_pricing,
 )
-from costplan.core.calculator import ActualCostResult
 
 if TYPE_CHECKING:
     from costplan.core.provider import BaseProvider
@@ -35,8 +37,8 @@ class BudgetExceededError(Exception):
         self,
         message: str,
         limit_type: str = "budget",
-        remaining_budget: Optional[float] = None,
-        allowed_budget: Optional[float] = None,
+        remaining_budget: float | None = None,
+        allowed_budget: float | None = None,
     ):
         self.limit_type = limit_type  # "per_call" | "per_session" | "session_locked"
         self.remaining_budget = remaining_budget
@@ -63,8 +65,8 @@ class BudgetPolicy:
 
     def __init__(
         self,
-        per_call: Optional[float] = None,
-        per_session: Optional[float] = None,
+        per_call: float | None = None,
+        per_session: float | None = None,
     ):
         """Initialize budget policy.
 
@@ -89,7 +91,7 @@ class BudgetSession:
 
 def _actual_from_usage_and_pricing(
     model: str,
-    usage: Dict[str, int],
+    usage: dict[str, int],
     input_price_per_1k: float,
     output_price_per_1k: float,
 ) -> ActualCostResult:
@@ -115,8 +117,8 @@ class BudgetedClient:
     def __init__(
         self,
         provider: "BaseProvider",
-        policy: Optional[BudgetPolicy] = None,
-        session: Optional[BudgetSession] = None,
+        policy: BudgetPolicy | None = None,
+        session: BudgetSession | None = None,
     ):
         """Initialize the budgeted client.
 
@@ -151,9 +153,9 @@ class BudgetedClient:
         self,
         prompt: str,
         model: str,
-        output_ratio: Optional[float] = None,
+        output_ratio: float | None = None,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> tuple[PredictionResult, ExecutionResult, ActualCostResult]:
         """Predict cost via provider, enforce budget, execute, then update session with actual cost.
@@ -179,18 +181,20 @@ class BudgetedClient:
         )
 
         if not execution.success:
-            return prediction, execution, ActualCostResult(
-                model=model,
-                actual_input_tokens=0,
-                actual_output_tokens=0,
-                actual_input_cost=0.0,
-                actual_output_cost=0.0,
-                actual_total_cost=0.0,
+            return (
+                prediction,
+                execution,
+                ActualCostResult(
+                    model=model,
+                    actual_input_tokens=0,
+                    actual_output_tokens=0,
+                    actual_input_cost=0.0,
+                    actual_output_cost=0.0,
+                    actual_total_cost=0.0,
+                ),
             )
 
-        actual = _actual_from_usage_and_pricing(
-            model, execution.usage, input_price, output_price
-        )
+        actual = _actual_from_usage_and_pricing(model, execution.usage, input_price, output_price)
         if self.session is not None:
             self.session.total_spent += actual.actual_total_cost
 
@@ -198,11 +202,11 @@ class BudgetedClient:
 
     def execute_with_messages(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         model: str,
-        output_ratio: Optional[float] = None,
+        output_ratio: float | None = None,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> tuple[PredictionResult, ExecutionResult, ActualCostResult]:
         """Same as execute but with chat messages. Predicts from combined message text."""
@@ -229,18 +233,20 @@ class BudgetedClient:
         )
 
         if not execution.success:
-            return prediction, execution, ActualCostResult(
-                model=model,
-                actual_input_tokens=0,
-                actual_output_tokens=0,
-                actual_input_cost=0.0,
-                actual_output_cost=0.0,
-                actual_total_cost=0.0,
+            return (
+                prediction,
+                execution,
+                ActualCostResult(
+                    model=model,
+                    actual_input_tokens=0,
+                    actual_output_tokens=0,
+                    actual_input_cost=0.0,
+                    actual_output_cost=0.0,
+                    actual_total_cost=0.0,
+                ),
             )
 
-        actual = _actual_from_usage_and_pricing(
-            model, execution.usage, input_price, output_price
-        )
+        actual = _actual_from_usage_and_pricing(model, execution.usage, input_price, output_price)
         if self.session is not None:
             self.session.total_spent += actual.actual_total_cost
 
@@ -251,16 +257,20 @@ class BudgetedClient:
 # BudgetedLLM: production circuit breaker. Thread-safe. Hard limits, dynamic max_tokens.
 # -----------------------------------------------------------------------------
 
-def _resolve_provider(provider: Union[str, "BaseProvider"], settings: Optional[Any]) -> "BaseProvider":
+
+def _resolve_provider(
+    provider: Union[str, "BaseProvider"], settings: Any | None
+) -> "BaseProvider":
     """Return BaseProvider from str (via factory) or use as-is."""
     if isinstance(provider, str):
-        from costplan.core.factory import create
         from costplan.config.settings import Settings
+        from costplan.core.factory import create
+
         return create(provider_name=provider, settings=settings or Settings())
     return provider
 
 
-def _extract_text_from_messages(messages: List[Dict[str, Any]]) -> str:
+def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
     """Extract text content from a list of chat messages for token prediction."""
     parts: list[str] = []
     for m in messages:
@@ -303,9 +313,9 @@ class BudgetedLLM:
         model: str,
         per_call_budget: float,
         session_budget: float,
-        settings: Optional[Any] = None,
-        output_ratio: Optional[float] = None,
-        on_budget_warning: Optional[Callable[[float, float, float], None]] = None,
+        settings: Any | None = None,
+        output_ratio: float | None = None,
+        on_budget_warning: Callable[[float, float, float], None] | None = None,
         warning_threshold: float = DEFAULT_WARNING_THRESHOLD,
     ):
         """
@@ -366,10 +376,8 @@ class BudgetedLLM:
         ):
             self._warning_fired = True
             remaining = max(0.0, self._session_budget - self._session_spent)
-            try:
+            with contextlib.suppress(Exception):
                 self._on_budget_warning(self._session_spent, remaining, self._session_budget)
-            except Exception:
-                pass  # Never let callback errors break the circuit breaker
 
     def _execute_budgeted(
         self,
@@ -478,6 +486,7 @@ class BudgetedLLM:
         Execute one call within budget. Injects max_tokens from remaining budget.
         Raises BudgetExceededError on per-call or per-session exceed; on session exhaust, locks.
         """
+
         def _execute(temperature: float, max_tokens: int, **kw: Any) -> ExecutionResult:
             return self._provider.execute(
                 prompt, self._model, temperature=temperature, max_tokens=max_tokens, **kw
@@ -487,7 +496,7 @@ class BudgetedLLM:
 
     def generate_with_messages(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         temperature: float = 1.0,
         **kwargs: Any,
     ) -> ExecutionResult:
@@ -509,6 +518,7 @@ class BudgetedLLM:
 # AsyncBudgetedLLM: async circuit breaker. asyncio.Lock for coroutine safety.
 # -----------------------------------------------------------------------------
 
+
 class AsyncBudgetedLLM:
     """
     Async execution wrapper that guarantees LLM calls stay within economic constraints.
@@ -522,9 +532,9 @@ class AsyncBudgetedLLM:
         model: str,
         per_call_budget: float,
         session_budget: float,
-        settings: Optional[Any] = None,
-        output_ratio: Optional[float] = None,
-        on_budget_warning: Optional[Callable[[float, float, float], None]] = None,
+        settings: Any | None = None,
+        output_ratio: float | None = None,
+        on_budget_warning: Callable[[float, float, float], None] | None = None,
         warning_threshold: float = DEFAULT_WARNING_THRESHOLD,
     ):
         """
@@ -582,10 +592,8 @@ class AsyncBudgetedLLM:
         ):
             self._warning_fired = True
             remaining = max(0.0, self._session_budget - self._session_spent)
-            try:
+            with contextlib.suppress(Exception):
                 self._on_budget_warning(self._session_spent, remaining, self._session_budget)
-            except Exception:
-                pass
 
     async def generate(
         self,
@@ -679,7 +687,7 @@ class AsyncBudgetedLLM:
 
     async def generate_with_messages(
         self,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         temperature: float = 1.0,
         **kwargs: Any,
     ) -> ExecutionResult:

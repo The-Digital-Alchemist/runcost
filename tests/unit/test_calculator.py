@@ -1,9 +1,10 @@
 """Unit tests for cost calculator."""
 
-import pytest
 from unittest.mock import Mock
 
-from costplan.core.calculator import CostCalculator, ActualCostResult
+import pytest
+
+from costplan.core.calculator import ActualCostResult, CostCalculator
 from costplan.core.pricing import PricingRegistry
 
 
@@ -39,14 +40,14 @@ def test_calculate_basic(calculator):
         "completion_tokens": 500,
         "total_tokens": 1500,
     }
-    
+
     result = calculator.calculate(usage, "gpt-3.5-turbo")
-    
+
     assert isinstance(result, ActualCostResult)
     assert result.model == "gpt-3.5-turbo"
     assert result.actual_input_tokens == 1000
     assert result.actual_output_tokens == 500
-    
+
     # Cost calculations: (1000/1000) * 0.001 + (500/1000) * 0.002
     assert result.actual_input_cost == 0.001
     assert result.actual_output_cost == 0.001
@@ -56,7 +57,7 @@ def test_calculate_basic(calculator):
 def test_calculate_missing_fields(calculator):
     """Test calculation with missing usage fields."""
     usage = {"prompt_tokens": 1000}  # Missing completion_tokens
-    
+
     with pytest.raises(ValueError, match="must contain"):
         calculator.calculate(usage, "gpt-4")
 
@@ -64,7 +65,7 @@ def test_calculate_missing_fields(calculator):
 def test_calculate_from_tokens(calculator):
     """Test calculation from token counts."""
     result = calculator.calculate_from_tokens(1000, 500, "gpt-4")
-    
+
     assert isinstance(result, ActualCostResult)
     assert result.actual_input_tokens == 1000
     assert result.actual_output_tokens == 500
@@ -75,9 +76,9 @@ def test_calculate_error_overestimate(calculator):
     """Test error calculation for overestimate."""
     predicted_cost = 0.005
     actual_cost = 0.004
-    
+
     error = calculator.calculate_error(predicted_cost, actual_cost)
-    
+
     # Error = ((0.005 - 0.004) / 0.004) * 100 = 25%
     assert error == 25.0
 
@@ -86,9 +87,9 @@ def test_calculate_error_underestimate(calculator):
     """Test error calculation for underestimate."""
     predicted_cost = 0.003
     actual_cost = 0.004
-    
+
     error = calculator.calculate_error(predicted_cost, actual_cost)
-    
+
     # Error = ((0.003 - 0.004) / 0.004) * 100 = -25%
     assert error == -25.0
 

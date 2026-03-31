@@ -5,36 +5,50 @@ wrapped command, and prints a cost summary when it exits.
 """
 
 import os
-import signal
+import socket
 import subprocess
-import sys
 import threading
 import time
 
 import click
+import uvicorn
+
+from costplan.proxy.app import create_app
+from costplan.proxy.budget_state import ProxyBudgetState
+from costplan.proxy.forwarder import Forwarder
 
 
 def _find_free_port(preferred: int) -> int:
-    """Return *preferred* if it's available, otherwise fail loudly."""
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind(("127.0.0.1", preferred))
-            return preferred
-        except OSError:
-            raise click.ClickException(
-                f"Port {preferred} is already in use. "
-                f"Pick another with --port or stop the process using it."
-            )
+    """Return *preferred* if available, otherwise scan upward for a free port."""
+    for candidate in range(preferred, preferred + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", candidate))
+                return candidate
+            except OSError:
+                continue
+    raise click.ClickException(
+        f"No free port found in range {preferred}-{preferred + 19}. "
+        f"Pick one with --port or stop the process using them."
+    )
 
 
 @click.command(context_settings={"ignore_unknown_options": True})
-@click.option("--per-call", "per_call", required=True, type=float,
-              help="Max dollars per individual API call")
-@click.option("--session", "session_budget", required=True, type=float,
-              help="Max dollars for the entire session")
-@click.option("--port", default=8080, type=int,
-              help="Port for the budget proxy (default: 8080)")
+@click.option(
+    "--per-call",
+    "per_call",
+    default=1.00,
+    type=float,
+    help="Max dollars per individual API call (default: $1.00)",
+)
+@click.option(
+    "--session",
+    "session_budget",
+    default=10.00,
+    type=float,
+    help="Max dollars for the entire session (default: $10.00)",
+)
+@click.option("--port", default=8080, type=int, help="Port for the budget proxy (default: 8080)")
 @click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
 def wrap(per_call, session_budget, port, command):
     """Wrap any command with budget enforcement.
@@ -45,9 +59,9 @@ def wrap(per_call, session_budget, port, command):
 
     \b
     Examples:
-        costplan wrap --per-call 1.00 --session 5.00 claude
-        costplan wrap --per-call 0.50 --session 10.00 python my_agent.py
-        costplan wrap --per-call 1.00 --session 5.00 --port 9090 claude
+        costplan wrap claude
+        costplan wrap --per-call 0.50 --session 5.00 claude
+        costplan wrap --port 9090 python my_agent.py
     """
     # --- Validate -----------------------------------------------------------
     if per_call > session_budget:
@@ -56,22 +70,7 @@ def wrap(per_call, session_budget, port, command):
             f"session budget (${session_budget:.2f})."
         )
 
-    _find_free_port(port)
-
-    # --- Lazy-import proxy deps --------------------------------------------
-    try:
-        import uvicorn  # noqa: F401
-    except ImportError:
-        click.echo(
-            "Error: Proxy dependencies not installed. Install with:\n"
-            "  pip install costplan[proxy]",
-            err=True,
-        )
-        raise SystemExit(1)
-
-    from costplan.proxy.budget_state import ProxyBudgetState
-    from costplan.proxy.forwarder import Forwarder
-    from costplan.proxy.app import create_app
+    port = _find_free_port(port)
 
     # --- Start the proxy in a daemon thread --------------------------------
     budget = ProxyBudgetState(per_call_budget=per_call, session_budget=session_budget)
@@ -81,10 +80,9 @@ def wrap(per_call, session_budget, port, command):
     host = "127.0.0.1"
     proxy_url = f"http://{host}:{port}"
 
-    server_ready = threading.Event()
-
     class _ReadyServer(uvicorn.Server):
         """Uvicorn server that signals when it's accepting connections."""
+
         def install_signal_handlers(self):
             pass  # We handle signals ourselves
 
@@ -134,7 +132,7 @@ def wrap(per_call, session_budget, port, command):
         click.echo(f"Error: command not found: {command[0]}", err=True)
         server.should_exit = True
         thread.join(timeout=3)
-        raise SystemExit(127)
+        raise SystemExit(127) from None
 
     # --- Cost summary ------------------------------------------------------
     import asyncio

@@ -1,10 +1,10 @@
 """Database models and connection management."""
 
 import uuid
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Generator, Optional
 
 from sqlalchemy import (
     Column,
@@ -12,10 +12,9 @@ from sqlalchemy import (
     Float,
     Integer,
     String,
-    Text,
     create_engine,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 Base = declarative_base()
 
@@ -58,15 +57,15 @@ class CalibrationMetadata(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     model = Column(String, nullable=False, index=True)
     token_bucket = Column(String, nullable=False, index=True)  # e.g., "0-1000", "1000-5000"
-    
+
     # Statistics
     avg_error_percent = Column(Float, nullable=False)
     std_dev_error = Column(Float, nullable=False)
     sample_count = Column(Integer, nullable=False)
-    
+
     # Learned parameters
     learned_output_ratio = Column(Float, nullable=True)
-    
+
     last_updated = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self) -> str:
@@ -87,21 +86,17 @@ class DatabaseManager:
         """
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Create engine with connection pooling
         self.engine = create_engine(
             f"sqlite:///{self.database_path}",
             echo=False,
             pool_pre_ping=True,
-            connect_args={"check_same_thread": False}
+            connect_args={"check_same_thread": False},
         )
-        
+
         # Create session factory
-        self.SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=self.engine
-        )
+        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
     def init_db(self) -> None:
         """Create all database tables."""
@@ -144,10 +139,10 @@ class DatabaseManager:
         predicted_input_tokens: int,
         predicted_output_tokens: int,
         predicted_cost: float,
-        actual_input_tokens: Optional[int] = None,
-        actual_output_tokens: Optional[int] = None,
-        actual_cost: Optional[float] = None,
-        error_percent: Optional[float] = None,
+        actual_input_tokens: int | None = None,
+        actual_output_tokens: int | None = None,
+        actual_cost: float | None = None,
+        error_percent: float | None = None,
     ) -> str:
         """Create a new run record.
 
@@ -181,7 +176,7 @@ class DatabaseManager:
             run_id = run.id
         return run_id
 
-    def get_run_by_id(self, run_id: str) -> Optional[Run]:
+    def get_run_by_id(self, run_id: str) -> Run | None:
         """Get a run by ID.
 
         Args:

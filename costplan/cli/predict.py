@@ -16,31 +16,11 @@ console = Console()
 
 @click.command()
 @click.argument("prompt", required=False)
-@click.option(
-    "--file", "-f",
-    type=click.Path(exists=True),
-    help="Read prompt from file"
-)
-@click.option(
-    "--model", "-m",
-    default="gpt-3.5-turbo",
-    help="Model name (default: gpt-3.5-turbo)"
-)
-@click.option(
-    "--provider", "-p",
-    default="openai",
-    help="Provider name (default: openai)"
-)
-@click.option(
-    "--output-ratio", "-r",
-    type=float,
-    help="Override default output token ratio"
-)
-@click.option(
-    "--list-models",
-    is_flag=True,
-    help="List supported models and exit"
-)
+@click.option("--file", "-f", type=click.Path(exists=True), help="Read prompt from file")
+@click.option("--model", "-m", default="gpt-3.5-turbo", help="Model name (default: gpt-3.5-turbo)")
+@click.option("--provider", "-p", default="openai", help="Provider name (default: openai)")
+@click.option("--output-ratio", "-r", type=float, help="Override default output token ratio")
+@click.option("--list-models", is_flag=True, help="List supported models and exit")
 @click.pass_context
 def predict(ctx, prompt, file, model, provider, output_ratio, list_models):
     """Predict cost for a prompt without execution. Uses provider only (no global pricing/token layers)."""
@@ -123,8 +103,13 @@ def predict(ctx, prompt, file, model, provider, output_ratio, list_models):
     )
     table.add_row("Input Cost", format_cost(result.predicted_input_cost))
     table.add_row("Output Cost", format_cost(result.predicted_output_cost))
-    table.add_row("Total Cost", f"[bold yellow]{format_cost(result.predicted_total_cost)}[/bold yellow]")
-    table.add_row("Confidence", f"[{'green' if result.confidence_level == 'High' else 'yellow' if result.confidence_level == 'Medium' else 'red'}]{confidence_str}[/]")
+    table.add_row(
+        "Total Cost", f"[bold yellow]{format_cost(result.predicted_total_cost)}[/bold yellow]"
+    )
+    table.add_row(
+        "Confidence",
+        f"[{'green' if result.confidence_level == 'High' else 'yellow' if result.confidence_level == 'Medium' else 'red'}]{confidence_str}[/]",
+    )
 
     console.print("\n")
     console.print(Panel(table, title="Predicted Cost Range", border_style="blue"))
@@ -132,4 +117,5 @@ def predict(ctx, prompt, file, model, provider, output_ratio, list_models):
 
     if file:
         from costplan.utils.helpers import truncate_text
+
         console.print(f"[dim]Prompt: {truncate_text(prompt_text, 80)}[/dim]\n")

@@ -20,6 +20,7 @@ class ProxyBudgetExceeded(Exception):
 @dataclass
 class CallRecord:
     """Record of a single proxied call."""
+
     timestamp: float
     model: str
     actual_cost: float
@@ -46,9 +47,9 @@ class ProxyBudgetState:
         self,
         per_call_budget: float,
         session_budget: float,
-        reset_every_seconds: Optional[float] = None,
+        reset_every_seconds: float | None = None,
         state_store: Optional["PersistentCallStore"] = None,
-        budget_window_seconds: Optional[float] = None,
+        budget_window_seconds: float | None = None,
     ):
         """
         Args:
@@ -179,15 +180,17 @@ class ProxyBudgetState:
                 if self._spent >= self._session:
                     self._locked = True
             self._call_count += 1
-            self._history.append(CallRecord(
-                timestamp=now,
-                model=model,
-                actual_cost=actual_cost,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read_tokens,
-                cache_creation_tokens=cache_creation_tokens,
-            ))
+            self._history.append(
+                CallRecord(
+                    timestamp=now,
+                    model=model,
+                    actual_cost=actual_cost,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                )
+            )
 
     async def remaining(self) -> float:
         """Return remaining session budget in dollars."""
@@ -217,7 +220,9 @@ class ProxyBudgetState:
                 "total_spent": round(spent, 6),
                 "remaining": round(remaining, 6),
                 "call_count": self._call_count,
-                "locked": self._locked if not self._use_rolling_window() else (spent >= self._session),
+                "locked": self._locked
+                if not self._use_rolling_window()
+                else (spent >= self._session),
             }
             if self._reset_every is not None:
                 out["reset_every_seconds"] = self._reset_every

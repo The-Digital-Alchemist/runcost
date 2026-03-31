@@ -19,14 +19,18 @@ Two integration paths. No complex setup. Just enforcement.
 
 ## Claude Code Quickstart
 
-Claude Code is the single largest money sink in AI tooling. CostPlan stops the bleed — **one command**:
-
 ```bash
-pip install costplan[proxy]
-costplan wrap --per-call 1.00 --session 5.00 claude
+pip install costplan
+costplan wrap claude
 ```
 
-The proxy starts, Claude Code launches with budget enforcement, and when you exit you get a cost summary. Open [http://localhost:8080](http://localhost:8080) while it's running to see remaining budget and reset the session.
+That's it. The proxy starts, Claude Code launches with budget enforcement ($1/call, $10/session), and when you exit you get a cost summary. Open [http://localhost:8080](http://localhost:8080) while it's running to see remaining budget and reset the session.
+
+Override defaults if needed:
+
+```bash
+costplan wrap --per-call 0.50 --session 5.00 claude
+```
 
 ---
 
@@ -34,22 +38,19 @@ The proxy starts, Claude Code launches with budget enforcement, and when you exi
 
 OpenClaw is a 24/7 AI gateway (WhatsApp, Telegram, Discord, etc.). Unlike Claude Code, it runs indefinitely — "fire and forget." CostPlan integrates by running the proxy in front of OpenClaw's LLM calls.
 
-**Two-process setup:**
-
 ```bash
-# Terminal 1: Start CostPlan proxy (long-running)
-costplan proxy --per-call 1.00 --session 50.00 --reset-every 24h
+# Terminal 1: Start CostPlan proxy (long-running, $1/call, $50/session, resets daily)
+costplan openclaw
 
 # Terminal 2: Run OpenClaw with budget enforcement
 export ANTHROPIC_BASE_URL=http://localhost:8080
 openclaw gateway --port 18789
 ```
 
-Or use `costplan openclaw` to start the proxy and print the env setup in one step:
+Override defaults if needed:
 
 ```bash
-costplan openclaw --per-call 1.00 --session 50.00 --reset-every 24h
-# Then in another terminal: export ANTHROPIC_BASE_URL=... && openclaw gateway
+costplan openclaw --per-call 2.00 --session 100.00 --reset-every 7d
 ```
 
 **OpenClaw config alternative** (custom provider in `~/.openclaw/openclaw.json`):
@@ -74,12 +75,6 @@ costplan openclaw --per-call 1.00 --session 50.00 --reset-every 24h
 }
 ```
 
-**Automatic budget reset**: Use `--reset-every 24h` so the session budget renews daily without manual reset. Or schedule a cron job to reset at midnight:
-
-```bash
-0 0 * * * curl -s -X POST http://localhost:8080/v1/budget/reset
-```
-
 **Rolling window (survives restarts)**: Use `--state-db` and `--budget-window` for a persistent rolling budget that survives proxy restarts:
 
 ```bash
@@ -91,7 +86,7 @@ costplan proxy --per-call 2.00 --session 20.00 --state-db ~/.costplan/budget.db 
 
 ```bash
 # Terminal 1: Start the circuit breaker
-costplan proxy --per-call 1.00 --session 5.00
+costplan proxy
 
 # Terminal 2: Use Claude Code with budget enforcement
 export ANTHROPIC_BASE_URL=http://localhost:8080
@@ -179,12 +174,8 @@ llm.reset()  # Zero spend, unlock, start fresh
 Transparent HTTP proxy that enforces budgets on any LLM client. Works with any language, any framework.
 
 ```bash
-pip install costplan[proxy]
-
-costplan proxy \
-  --per-call 1.00 \
-  --session 10.00 \
-  --port 8080
+pip install costplan
+costplan proxy
 ```
 
 Then point your client at it:
@@ -196,6 +187,8 @@ export OPENAI_BASE_URL=http://localhost:8080/v1
 # Anthropic clients / Claude Code
 export ANTHROPIC_BASE_URL=http://localhost:8080
 ```
+
+Defaults: $1.00/call, $10.00/session. Override with `--per-call` and `--session`.
 
 ### Proxy Endpoints
 
@@ -263,11 +256,7 @@ CostPlan closes that gap.
 ## Install
 
 ```bash
-# Core SDK only
 pip install costplan
-
-# With proxy server
-pip install costplan[proxy]
 
 # Development
 pip install -e ".[dev]"
@@ -287,15 +276,18 @@ pip install -e ".[dev]"
 ## CLI
 
 ```bash
-# Wrap any command with budget enforcement (one-liner)
-costplan wrap --per-call 1.00 --session 5.00 claude
-costplan wrap --per-call 0.50 --session 10.00 python my_agent.py
+# Wrap any command with budget enforcement (sensible defaults, just works)
+costplan wrap claude
+costplan wrap python my_agent.py
+
+# Customize budgets when needed
+costplan wrap --per-call 0.50 --session 5.00 claude
 
 # Start budget enforcement proxy (manual two-terminal mode)
-costplan proxy --per-call 1.00 --session 5.00
+costplan proxy
 
 # OpenClaw integration: proxy with auto-reset for 24/7 VA use
-costplan openclaw --per-call 1.00 --session 50.00 --reset-every 24h
+costplan openclaw
 
 # Predict cost (no API call)
 costplan predict "Your prompt" --provider openai --model gpt-4o

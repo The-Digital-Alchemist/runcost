@@ -12,20 +12,19 @@ Endpoints:
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
-from costplan.core.pricing import PricingRegistry, PricingNotFoundError
-from costplan.proxy.budget_state import ProxyBudgetState, ProxyBudgetExceeded
-from costplan.proxy.forwarder import Forwarder
-from costplan.proxy.stream import SSEParser, parse_openai_sse_usage
+from costplan.core.pricing import PricingNotFoundError, PricingRegistry
+from costplan.proxy.budget_state import ProxyBudgetExceeded, ProxyBudgetState
 from costplan.proxy.cost import (
     compute_anthropic_cost,
     compute_openai_cost,
     heuristic_input_cost_estimate,
 )
+from costplan.proxy.forwarder import Forwarder
+from costplan.proxy.stream import SSEParser, parse_openai_sse_usage
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +46,8 @@ def _extract_text_length(messages: list) -> int:
 def create_app(
     budget: ProxyBudgetState,
     forwarder: Forwarder,
-    openai_pricing: Optional[PricingRegistry] = None,
-    anthropic_pricing: Optional[PricingRegistry] = None,
+    openai_pricing: PricingRegistry | None = None,
+    anthropic_pricing: PricingRegistry | None = None,
 ) -> FastAPI:
     """Create the FastAPI proxy application.
 
@@ -61,8 +60,9 @@ def create_app(
     Returns:
         Configured FastAPI application.
     """
+
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(_app: FastAPI):
         yield
         await forwarder.close()
 
@@ -288,7 +288,9 @@ def create_app(
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
-                content={"error": {"message": "Invalid JSON body", "type": "invalid_request_error"}},
+                content={
+                    "error": {"message": "Invalid JSON body", "type": "invalid_request_error"}
+                },
             )
 
         model = body.get("model", "")
@@ -329,7 +331,10 @@ def create_app(
             raw_body = json.dumps(body).encode("utf-8")
 
             upstream = await forwarder.forward_openai(
-                "/v1/chat/completions", raw_body, headers, stream=True,
+                "/v1/chat/completions",
+                raw_body,
+                headers,
+                stream=True,
             )
 
             usage_acc: dict = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -371,7 +376,10 @@ def create_app(
 
         else:
             upstream = await forwarder.forward_openai(
-                "/v1/chat/completions", raw_body, headers, stream=False,
+                "/v1/chat/completions",
+                raw_body,
+                headers,
+                stream=False,
             )
 
             resp_body = upstream.content
@@ -380,7 +388,9 @@ def create_app(
                 usage = resp_json.get("usage", {})
                 prompt_tokens = usage.get("prompt_tokens", 0)
                 completion_tokens = usage.get("completion_tokens", 0)
-                cost = compute_openai_cost(model, prompt_tokens, completion_tokens, pricing=_openai_pricing)
+                cost = compute_openai_cost(
+                    model, prompt_tokens, completion_tokens, pricing=_openai_pricing
+                )
                 await budget.record_actual(
                     cost,
                     model=model,
@@ -392,7 +402,8 @@ def create_app(
 
             remaining = await budget.remaining()
             resp_headers = {
-                k: v for k, v in upstream.headers.items()
+                k: v
+                for k, v in upstream.headers.items()
                 if k.lower() not in {"transfer-encoding", "content-encoding", "content-length"}
             }
             resp_headers["X-CostPlan-Budget-Remaining"] = str(remaining)
@@ -413,7 +424,9 @@ def create_app(
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
-                content={"error": {"message": "Invalid JSON body", "type": "invalid_request_error"}},
+                content={
+                    "error": {"message": "Invalid JSON body", "type": "invalid_request_error"}
+                },
             )
 
         model = body.get("model", "")
@@ -450,7 +463,10 @@ def create_app(
 
         if is_stream:
             upstream = await forwarder.forward_anthropic(
-                "/v1/messages", raw_body, headers, stream=True,
+                "/v1/messages",
+                raw_body,
+                headers,
+                stream=True,
             )
 
             sse_parser = SSEParser()
@@ -484,8 +500,11 @@ def create_app(
                         logger.info(
                             "Anthropic stream: model=%s input=%d output=%d "
                             "cache_read=%d cache_create=%d cost=$%.6f",
-                            model, usage.input_tokens, usage.output_tokens,
-                            usage.cache_read_input_tokens, usage.cache_creation_input_tokens,
+                            model,
+                            usage.input_tokens,
+                            usage.output_tokens,
+                            usage.cache_read_input_tokens,
+                            usage.cache_creation_input_tokens,
                             cost,
                         )
                     except Exception:
@@ -504,7 +523,10 @@ def create_app(
 
         else:
             upstream = await forwarder.forward_anthropic(
-                "/v1/messages", raw_body, headers, stream=False,
+                "/v1/messages",
+                raw_body,
+                headers,
+                stream=False,
             )
 
             resp_body = upstream.content
@@ -536,7 +558,8 @@ def create_app(
 
             remaining = await budget.remaining()
             resp_headers = {
-                k: v for k, v in upstream.headers.items()
+                k: v
+                for k, v in upstream.headers.items()
                 if k.lower() not in {"transfer-encoding", "content-encoding", "content-length"}
             }
             resp_headers["X-CostPlan-Budget-Remaining"] = str(remaining)

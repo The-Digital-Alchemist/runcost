@@ -3,7 +3,6 @@
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
 
 
 def _init_db(conn: sqlite3.Connection) -> None:
@@ -20,9 +19,7 @@ def _init_db(conn: sqlite3.Connection) -> None:
             cache_creation_tokens INTEGER DEFAULT 0
         )
     """)
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_proxy_calls_timestamp ON proxy_calls(timestamp)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_calls_timestamp ON proxy_calls(timestamp)")
     conn.commit()
 
 

@@ -1,66 +1,82 @@
 """CLI command to start the CostPlan budget enforcement proxy."""
 
+import logging
+
 import click
+import uvicorn
 
 from costplan.utils.helpers import parse_duration_seconds
 
 
-def _parse_reset_every(ctx, param, value):
+def _parse_reset_every(_ctx, _param, value):
     """Click callback to parse --reset-every duration."""
     if not value:
         return None
     try:
         return parse_duration_seconds(value)
     except ValueError as e:
-        raise click.BadParameter(str(e))
+        raise click.BadParameter(str(e)) from e
 
 
 @click.command()
 @click.option("--port", default=8080, type=int, help="Port to listen on (default: 8080)")
 @click.option("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
 @click.option(
-    "--per-call", "per_call", required=True, type=float,
-    help="Max dollars per individual API call"
+    "--per-call",
+    "per_call",
+    default=1.00,
+    type=float,
+    help="Max dollars per individual API call (default: $1.00)",
 )
 @click.option(
-    "--session", "session_budget", required=True, type=float,
-    help="Max dollars for the entire proxy session"
+    "--session",
+    "session_budget",
+    default=10.00,
+    type=float,
+    help="Max dollars for the entire proxy session (default: $10.00)",
 )
 @click.option(
     "--reset-every",
     default=None,
     callback=_parse_reset_every,
-    help="Auto-reset budget every N (e.g. 24h, 7d, 30d). For OpenClaw / fire-and-forget use."
+    help="Auto-reset budget every N (e.g. 24h, 7d, 30d). For OpenClaw / fire-and-forget use.",
 )
 @click.option(
     "--state-db",
     default=None,
     type=click.Path(path_type=str),
-    help="SQLite path to persist call records. Enables --budget-window."
+    help="SQLite path to persist call records. Enables --budget-window.",
 )
 @click.option(
     "--budget-window",
     default=None,
     callback=_parse_reset_every,
-    help="Rolling window for budget (e.g. 24h). Requires --state-db. Survives restarts."
+    help="Rolling window for budget (e.g. 24h). Requires --state-db. Survives restarts.",
 )
+@click.option("--target-openai", default="https://api.openai.com", help="Upstream OpenAI API URL")
 @click.option(
-    "--target-openai", default="https://api.openai.com",
-    help="Upstream OpenAI API URL"
-)
-@click.option(
-    "--target-anthropic", default="https://api.anthropic.com",
-    help="Upstream Anthropic API URL"
+    "--target-anthropic", default="https://api.anthropic.com", help="Upstream Anthropic API URL"
 )
 @click.option("--log-level", default="INFO", help="Log level (DEBUG, INFO, WARNING, ERROR)")
-def proxy(port, host, per_call, session_budget, reset_every, state_db, budget_window, target_openai, target_anthropic, log_level):
+def proxy(
+    port,
+    host,
+    per_call,
+    session_budget,
+    reset_every,
+    state_db,
+    budget_window,
+    target_openai,
+    target_anthropic,
+    log_level,
+):
     """Start the CostPlan budget enforcement proxy.
 
     Drop-in economic circuit breaker for any LLM workflow.
 
     \b
     Claude Code quickstart:
-        costplan proxy --per-call 1.00 --session 5.00
+        costplan proxy
         export ANTHROPIC_BASE_URL=http://localhost:8080
         claude  # Budget-enforced!
 
@@ -70,22 +86,10 @@ def proxy(port, host, per_call, session_budget, reset_every, state_db, budget_wi
         export OPENAI_BASE_URL=http://localhost:8080/v1
         python my_agent.py  # Budget-enforced!
     """
-    import logging
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-
-    try:
-        import uvicorn
-    except ImportError:
-        click.echo(
-            "Error: Proxy dependencies not installed. Install with:\n"
-            "  pip install costplan[proxy]\n"
-            "  # or: pip install fastapi uvicorn httpx",
-            err=True,
-        )
-        raise SystemExit(1)
 
     if per_call > session_budget:
         click.echo(
@@ -109,12 +113,15 @@ def proxy(port, host, per_call, session_budget, reset_every, state_db, budget_wi
         )
         raise SystemExit(1)
 
+    from costplan.proxy.app import create_app
     from costplan.proxy.budget_state import ProxyBudgetState
     from costplan.proxy.forwarder import Forwarder
-    from costplan.proxy.app import create_app
-    from costplan.proxy.persistent_store import PersistentCallStore
 
-    state_store = PersistentCallStore(state_db) if state_db else None
+    state_store = None
+    if state_db:
+        from costplan.proxy.persistent_store import PersistentCallStore
+
+        state_store = PersistentCallStore(state_db)
 
     budget = ProxyBudgetState(
         per_call_budget=per_call,
@@ -131,10 +138,18 @@ def proxy(port, host, per_call, session_budget, reset_every, state_db, budget_wi
     click.echo(f"  Session budget:   ${session_budget:.2f}")
     if reset_every is not None:
         hours = reset_every / 3600
-        click.echo(f"  Auto-reset:       every {(hours / 24):.1f}d" if hours >= 24 else f"  Auto-reset:       every {hours:.1f}h")
+        click.echo(
+            f"  Auto-reset:       every {(hours / 24):.1f}d"
+            if hours >= 24
+            else f"  Auto-reset:       every {hours:.1f}h"
+        )
     if budget_window is not None:
         h = budget_window / 3600
-        click.echo(f"  Budget window:    {(h / 24):.1f}d rolling" if h >= 24 else f"  Budget window:    {h:.1f}h rolling")
+        click.echo(
+            f"  Budget window:    {(h / 24):.1f}d rolling"
+            if h >= 24
+            else f"  Budget window:    {h:.1f}h rolling"
+        )
     if state_db:
         click.echo(f"  State DB:        {state_db}")
     click.echo(f"  OpenAI target:    {target_openai}")

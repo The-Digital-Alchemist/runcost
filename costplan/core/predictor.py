@@ -1,11 +1,11 @@
 """Cost prediction engine for LLM requests."""
 
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from typing import Any
 
+from costplan.config.settings import Settings
 from costplan.core.estimator import TokenEstimator
 from costplan.core.pricing import PricingRegistry
-from costplan.config.settings import Settings
 
 
 @dataclass
@@ -19,7 +19,7 @@ class PredictionResult:
     predicted_output_cost: float
     predicted_total_cost: float
     confidence_level: str  # "High", "Medium", "Low"
-    confidence_percent: Optional[float] = None  # Historical error percentage
+    confidence_percent: float | None = None  # Historical error percentage
 
     def __repr__(self) -> str:
         return (
@@ -36,7 +36,7 @@ def build_prediction_result_from_tokens_and_pricing(
     input_price_per_1k: float,
     output_price_per_1k: float,
     confidence_level: str = "Medium",
-    confidence_percent: Optional[float] = None,
+    confidence_percent: float | None = None,
 ) -> PredictionResult:
     """Build a PredictionResult from token counts and per-1k pricing. Used by providers."""
     input_cost = (input_tokens / 1000) * input_price_per_1k
@@ -59,9 +59,9 @@ class CostPredictor:
 
     def __init__(
         self,
-        pricing_registry: Optional[PricingRegistry] = None,
-        settings: Optional[Settings] = None,
-        token_estimator: Optional[TokenEstimator] = None,
+        pricing_registry: PricingRegistry | None = None,
+        settings: Settings | None = None,
+        token_estimator: TokenEstimator | None = None,
     ):
         """Initialize the cost predictor.
 
@@ -78,10 +78,7 @@ class CostPredictor:
         self._historical_errors = {}  # Cache for historical errors
 
     def predict(
-        self,
-        prompt: str,
-        model: str,
-        output_ratio: Optional[float] = None
+        self, prompt: str, model: str, output_ratio: float | None = None
     ) -> PredictionResult:
         """Predict cost for a single prompt.
 
@@ -101,8 +98,7 @@ class CostPredictor:
         output_tokens = int(input_tokens * ratio)
 
         # Get pricing
-        input_price_per_1k, output_price_per_1k = \
-            self.pricing_registry.get_model_pricing(model)
+        input_price_per_1k, output_price_per_1k = self.pricing_registry.get_model_pricing(model)
 
         # Calculate costs
         input_cost = (input_tokens / 1000) * input_price_per_1k
@@ -124,10 +120,7 @@ class CostPredictor:
         )
 
     def predict_from_messages(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str,
-        output_ratio: Optional[float] = None
+        self, messages: list[dict[str, Any]], model: str, output_ratio: float | None = None
     ) -> PredictionResult:
         """Predict cost for chat messages.
 
@@ -147,8 +140,7 @@ class CostPredictor:
         output_tokens = int(input_tokens * ratio)
 
         # Get pricing
-        input_price_per_1k, output_price_per_1k = \
-            self.pricing_registry.get_model_pricing(model)
+        input_price_per_1k, output_price_per_1k = self.pricing_registry.get_model_pricing(model)
 
         # Calculate costs
         input_cost = (input_tokens / 1000) * input_price_per_1k
@@ -170,11 +162,8 @@ class CostPredictor:
         )
 
     def batch_predict(
-        self,
-        prompts: List[str],
-        model: str,
-        output_ratio: Optional[float] = None
-    ) -> List[PredictionResult]:
+        self, prompts: list[str], model: str, output_ratio: float | None = None
+    ) -> list[PredictionResult]:
         """Predict costs for multiple prompts.
 
         Args:
@@ -185,12 +174,9 @@ class CostPredictor:
         Returns:
             List of PredictionResult objects
         """
-        return [
-            self.predict(prompt, model, output_ratio)
-            for prompt in prompts
-        ]
+        return [self.predict(prompt, model, output_ratio) for prompt in prompts]
 
-    def _calculate_confidence(self, model: str) -> tuple[str, Optional[float]]:
+    def _calculate_confidence(self, model: str) -> tuple[str, float | None]:
         """Calculate confidence level based on historical error.
 
         Args:
@@ -225,7 +211,7 @@ class CostPredictor:
         """
         self._historical_errors[model] = error_percent
 
-    def set_historical_errors(self, errors: Dict[str, float]) -> None:
+    def set_historical_errors(self, errors: dict[str, float]) -> None:
         """Set historical errors for multiple models.
 
         Args:

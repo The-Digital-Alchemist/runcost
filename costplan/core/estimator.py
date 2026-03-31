@@ -1,7 +1,7 @@
 """Token estimation for LLM inputs."""
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -38,17 +38,12 @@ class TokenEstimator:
                         f"Tiktoken failed for model {model} (no fallback). {e}"
                     ) from e
                 logger.warning(
-                    f"Tiktoken estimation failed for model {model}: {e}. "
-                    "Falling back to heuristic."
+                    f"Tiktoken estimation failed for model {model}: {e}. Falling back to heuristic."
                 )
                 return self._estimate_with_heuristic(text)
         return self._estimate_with_heuristic(text)
 
-    def estimate_from_messages(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str
-    ) -> int:
+    def estimate_from_messages(self, messages: list[dict[str, Any]], model: str) -> int:
         """Estimate token count for chat messages.
 
         Args:
@@ -102,20 +97,13 @@ class TokenEstimator:
                 self._encoders[model] = tiktoken.encoding_for_model(model)
             except KeyError:
                 # Model not recognized, use cl100k_base (GPT-4 default)
-                logger.info(
-                    f"Model {model} not recognized by tiktoken, "
-                    "using cl100k_base encoding"
-                )
+                logger.info(f"Model {model} not recognized by tiktoken, using cl100k_base encoding")
                 self._encoders[model] = tiktoken.get_encoding("cl100k_base")
 
         encoder = self._encoders[model]
         return len(encoder.encode(text))
 
-    def _estimate_messages_with_tiktoken(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str
-    ) -> int:
+    def _estimate_messages_with_tiktoken(self, messages: list[dict[str, Any]], model: str) -> int:
         """Estimate messages using tiktoken with proper formatting.
 
         Args:
@@ -160,11 +148,7 @@ class TokenEstimator:
         # Conservative estimate: 1 token ≈ 4 characters
         return max(1, len(text) // 4)
 
-    def batch_estimate(
-        self,
-        texts: List[str],
-        model: str
-    ) -> List[int]:
+    def batch_estimate(self, texts: list[str], model: str) -> list[int]:
         """Estimate tokens for multiple texts.
 
         Args:

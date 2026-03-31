@@ -2,11 +2,11 @@
 
 import json
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
 
 class PricingNotFoundError(Exception):
     """Raised when pricing information is not found for a model."""
+
     pass
 
 
@@ -34,8 +34,8 @@ class PricingRegistry:
 
     def __init__(
         self,
-        pricing_file_path: Optional[str] = None,
-        provider_name: Optional[str] = None,
+        pricing_file_path: str | None = None,
+        provider_name: str | None = None,
     ):
         """Initialize the pricing registry.
 
@@ -45,8 +45,8 @@ class PricingRegistry:
                 is multi-provider, this selects the slice. If None, the file is treated as flat
                 (single-provider format).
         """
-        self._pricing_data: Dict[str, Dict[str, float]] = {}
-        self._aliases: Dict[str, str] = {}
+        self._pricing_data: dict[str, dict[str, float]] = {}
+        self._aliases: dict[str, str] = {}
         self._pricing_file_path = pricing_file_path
         self._provider_name = provider_name
         self.load_pricing()
@@ -67,7 +67,7 @@ class PricingRegistry:
         if not pricing_path.exists():
             raise FileNotFoundError(f"Pricing file not found: {pricing_path}")
 
-        with open(pricing_path, "r", encoding="utf-8") as f:
+        with pricing_path.open(encoding="utf-8") as f:
             data = json.load(f)
 
         # Load model aliases if present
@@ -82,7 +82,7 @@ class PricingRegistry:
             if provider not in data:
                 raise FileNotFoundError(
                     f"Provider '{provider}' not found in {pricing_path}. "
-                    f"Top-level keys: {[k for k in data.keys() if k != 'model_aliases']}"
+                    f"Top-level keys: {[k for k in data if k != 'model_aliases']}"
                 )
             self._pricing_data = data[provider]
         else:
@@ -93,7 +93,7 @@ class PricingRegistry:
         """Resolve model aliases to canonical names."""
         return self._aliases.get(model_name, model_name)
 
-    def get_model_pricing(self, model_name: str) -> Tuple[float, float]:
+    def get_model_pricing(self, model_name: str) -> tuple[float, float]:
         """Get pricing information for a specific model.
 
         Args:
@@ -113,12 +113,9 @@ class PricingRegistry:
             )
 
         pricing = self._pricing_data[resolved]
-        return (
-            pricing["input_cost_per_1k_tokens"],
-            pricing["output_cost_per_1k_tokens"]
-        )
+        return (pricing["input_cost_per_1k_tokens"], pricing["output_cost_per_1k_tokens"])
 
-    def get_full_pricing(self, model_name: str) -> Dict[str, float]:
+    def get_full_pricing(self, model_name: str) -> dict[str, float]:
         """Get full pricing dict for a model, including cache pricing if available.
 
         Args:
@@ -152,8 +149,8 @@ class PricingRegistry:
         model_name: str,
         input_cost_per_1k: float,
         output_cost_per_1k: float,
-        cache_read_cost_per_1k: Optional[float] = None,
-        cache_creation_cost_per_1k: Optional[float] = None,
+        cache_read_cost_per_1k: float | None = None,
+        cache_creation_cost_per_1k: float | None = None,
     ) -> None:
         """Add or update pricing for a model.
 
@@ -164,7 +161,7 @@ class PricingRegistry:
             cache_read_cost_per_1k: Cost per 1000 cache read tokens (optional)
             cache_creation_cost_per_1k: Cost per 1000 cache creation tokens (optional)
         """
-        pricing: Dict[str, float] = {
+        pricing: dict[str, float] = {
             "input_cost_per_1k_tokens": input_cost_per_1k,
             "output_cost_per_1k_tokens": output_cost_per_1k,
         }

@@ -4,37 +4,49 @@ Starts the proxy with OpenClaw-specific setup instructions. Does not wrap
 the gateway (which runs as a daemon); user runs OpenClaw in a separate process.
 """
 
+import logging
+
 import click
+import uvicorn
 
 from costplan.utils.helpers import parse_duration_seconds
 
+# Default 24h in seconds — OpenClaw is long-running, daily reset is the norm.
+_DEFAULT_RESET_EVERY = "24h"
 
-def _parse_reset_every(ctx, param, value):
+
+def _parse_reset_every(_ctx, _param, value):
     """Click callback to parse --reset-every duration."""
     if not value:
         return None
     try:
         return parse_duration_seconds(value)
     except ValueError as e:
-        raise click.BadParameter(str(e))
+        raise click.BadParameter(str(e)) from e
 
 
 @click.command()
 @click.option("--port", default=8080, type=int, help="Port for CostPlan proxy (default: 8080)")
 @click.option("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
 @click.option(
-    "--per-call", "per_call", required=True, type=float,
-    help="Max dollars per individual API call",
+    "--per-call",
+    "per_call",
+    default=1.00,
+    type=float,
+    help="Max dollars per individual API call (default: $1.00)",
 )
 @click.option(
-    "--session", "session_budget", required=True, type=float,
-    help="Max dollars for the session (resets automatically if --reset-every set)",
+    "--session",
+    "session_budget",
+    default=50.00,
+    type=float,
+    help="Max dollars for the session (default: $50.00, resets daily)",
 )
 @click.option(
     "--reset-every",
-    default=None,
+    default=_DEFAULT_RESET_EVERY,
     callback=_parse_reset_every,
-    help="Auto-reset budget every N (e.g. 24h, 7d). Recommended for OpenClaw.",
+    help="Auto-reset budget every N (e.g. 24h, 7d). Default: 24h.",
 )
 @click.option(
     "--state-db",
@@ -57,28 +69,17 @@ def openclaw(port, host, per_call, session_budget, reset_every, state_db, budget
     calls from OpenClaw (WhatsApp, Telegram, Discord, etc.).
 
     \b
-    Example:
-        costplan openclaw --per-call 1.00 --session 50.00 --reset-every 24h
+    Examples:
+        costplan openclaw
+        costplan openclaw --per-call 2.00 --session 100.00
         # In another terminal:
         export ANTHROPIC_BASE_URL=http://localhost:8080
         openclaw gateway --port 18789
     """
-    import logging
-
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-
-    try:
-        import uvicorn
-    except ImportError:
-        click.echo(
-            "Error: Proxy dependencies not installed. Install with:\n"
-            "  pip install costplan[proxy]",
-            err=True,
-        )
-        raise SystemExit(1)
 
     if per_call > session_budget:
         click.echo(
@@ -102,12 +103,15 @@ def openclaw(port, host, per_call, session_budget, reset_every, state_db, budget
         )
         raise SystemExit(1)
 
+    from costplan.proxy.app import create_app
     from costplan.proxy.budget_state import ProxyBudgetState
     from costplan.proxy.forwarder import Forwarder
-    from costplan.proxy.app import create_app
-    from costplan.proxy.persistent_store import PersistentCallStore
 
-    state_store = PersistentCallStore(state_db) if state_db else None
+    state_store = None
+    if state_db:
+        from costplan.proxy.persistent_store import PersistentCallStore
+
+        state_store = PersistentCallStore(state_db)
 
     budget = ProxyBudgetState(
         per_call_budget=per_call,
@@ -132,7 +136,11 @@ def openclaw(port, host, per_call, session_budget, reset_every, state_db, budget
     click.echo(f"  Session:   ${session_budget:.2f}")
     if reset_every is not None:
         hours = reset_every / 3600
-        click.echo(f"  Auto-reset: every {(hours / 24):.1f}d" if hours >= 24 else f"  Auto-reset: every {hours:.1f}h")
+        click.echo(
+            f"  Auto-reset: every {(hours / 24):.1f}d"
+            if hours >= 24
+            else f"  Auto-reset: every {hours:.1f}h"
+        )
     click.echo()
     click.echo(f"Dashboard: {proxy_url}/")
     click.echo()

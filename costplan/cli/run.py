@@ -8,76 +8,69 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from costplan.core.budget import BudgetedClient, BudgetExceededError, BudgetPolicy, BudgetSession
 from costplan.core.calculator import calculate_error_percent
 from costplan.core.factory import create
 from costplan.core.pricing import PricingNotFoundError
-from costplan.core.budget import BudgetPolicy, BudgetSession, BudgetedClient, BudgetExceededError
 from costplan.storage.tracker import RunTracker
-from costplan.utils.helpers import format_cost, format_percentage, format_tokens, read_prompt_from_file
+from costplan.utils.helpers import (
+    format_cost,
+    format_percentage,
+    format_tokens,
+    read_prompt_from_file,
+)
 
 console = Console()
 
 
 @click.command()
 @click.argument("prompt", required=False)
+@click.option("--file", "-f", type=click.Path(exists=True), help="Read prompt from file")
+@click.option("--model", "-m", default="gpt-3.5-turbo", help="Model name (default: gpt-3.5-turbo)")
 @click.option(
-    "--file", "-f",
-    type=click.Path(exists=True),
-    help="Read prompt from file"
-)
-@click.option(
-    "--model", "-m",
-    default="gpt-3.5-turbo",
-    help="Model name (default: gpt-3.5-turbo)"
-)
-@click.option(
-    "--provider", "-p",
-    default="openai",
-    help="Provider: openai or anthropic (default: openai)"
+    "--provider", "-p", default="openai", help="Provider: openai or anthropic (default: openai)"
 )
 @click.option(
     "--api-key",
-    help="API key override (otherwise from OPENAI_API_KEY or ANTHROPIC_API_KEY per provider)"
+    help="API key override (otherwise from OPENAI_API_KEY or ANTHROPIC_API_KEY per provider)",
 )
 @click.option(
-    "--base-url",
-    envvar="OPENAI_BASE_URL",
-    help="API base URL (OpenAI-compatible providers only)"
+    "--base-url", envvar="OPENAI_BASE_URL", help="API base URL (OpenAI-compatible providers only)"
 )
+@click.option("--output-ratio", "-r", type=float, help="Override default output token ratio")
 @click.option(
-    "--output-ratio", "-r",
-    type=float,
-    help="Override default output token ratio"
+    "--temperature", "-t", type=float, default=1.0, help="Sampling temperature (default: 1.0)"
 )
+@click.option("--max-tokens", type=int, help="Maximum tokens to generate")
 @click.option(
-    "--temperature", "-t",
-    type=float,
-    default=1.0,
-    help="Sampling temperature (default: 1.0)"
-)
-@click.option(
-    "--max-tokens",
-    type=int,
-    help="Maximum tokens to generate"
-)
-@click.option(
-    "--show-response/--no-response",
-    default=True,
-    help="Show/hide LLM response (default: show)"
+    "--show-response/--no-response", default=True, help="Show/hide LLM response (default: show)"
 )
 @click.option(
     "--per-call",
     type=float,
-    help="Max cost per call (dollars). Abort before running if predicted cost exceeds this."
+    help="Max cost per call (dollars). Abort before running if predicted cost exceeds this.",
 )
 @click.option(
     "--per-session",
     type=float,
-    help="Max total cost for this session (dollars). Abort if predicted cost would exceed remaining budget."
+    help="Max total cost for this session (dollars). Abort if predicted cost would exceed remaining budget.",
 )
 @click.pass_context
-def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
-        temperature, max_tokens, show_response, per_call, per_session):
+def run(
+    ctx,
+    prompt,
+    file,
+    model,
+    provider,
+    api_key,
+    base_url,
+    output_ratio,
+    temperature,
+    max_tokens,
+    show_response,
+    per_call,
+    per_session,
+):
     """Execute a prompt and compare predicted vs actual cost.
 
     This command will:
@@ -112,12 +105,16 @@ def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
 
     # Resolve API key for chosen provider
     if not api_key:
-        api_key = settings.get_api_key() if provider_name == "openai" else settings.get_anthropic_api_key()
+        api_key = (
+            settings.get_api_key()
+            if provider_name == "openai"
+            else settings.get_anthropic_api_key()
+        )
     if not api_key:
         env_var = "OPENAI_API_KEY" if provider_name == "openai" else "ANTHROPIC_API_KEY"
         click.echo(
             f"Error: API key not found for provider '{provider}'. Set {env_var} or use --api-key.",
-            err=True
+            err=True,
         )
         sys.exit(1)
 
@@ -141,7 +138,11 @@ def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
         if provider_name == "openai":
             provider_kwargs["base_url"] = base_url or settings.get_base_url()
         prov = create(provider_name=provider_name, **provider_kwargs)
-        policy = BudgetPolicy(per_call=per_call, per_session=per_session) if (per_call is not None or per_session is not None) else None
+        policy = (
+            BudgetPolicy(per_call=per_call, per_session=per_session)
+            if (per_call is not None or per_session is not None)
+            else None
+        )
         session = BudgetSession() if policy else None
         client = BudgetedClient(prov, policy=policy, session=session)
         tracker = RunTracker(settings=settings)
@@ -161,7 +162,8 @@ def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
         task1 = progress.add_task("Predicting cost...", total=None)
         try:
             prediction, execution, actual = client.execute(
-                prompt_text, model,
+                prompt_text,
+                model,
                 output_ratio=output_ratio,
                 temperature=temperature,
                 max_tokens=max_tokens,
@@ -175,7 +177,9 @@ def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
             console.print(f"[red]Error: {e}[/red]")
             sys.exit(1)
         progress.update(task1, completed=True)
-        console.print(f"   [green]Predicted: {format_cost(prediction.predicted_total_cost)}[/green]")
+        console.print(
+            f"   [green]Predicted: {format_cost(prediction.predicted_total_cost)}[/green]"
+        )
 
         task2 = progress.add_task("Executing request...", total=None)
         progress.update(task2, completed=True)
@@ -240,16 +244,8 @@ def run(ctx, prompt, file, model, provider, api_key, base_url, output_ratio,
 
 
 @click.command()
-@click.option(
-    "--limit", "-n",
-    type=int,
-    default=10,
-    help="Number of runs to show (default: 10)"
-)
-@click.option(
-    "--model", "-m",
-    help="Filter by model name"
-)
+@click.option("--limit", "-n", type=int, default=10, help="Number of runs to show (default: 10)")
+@click.option("--model", "-m", help="Filter by model name")
 @click.pass_context
 def history(ctx, limit, model):
     """Show recent run history.
@@ -305,10 +301,7 @@ def history(ctx, limit, model):
 
 
 @click.command()
-@click.option(
-    "--model", "-m",
-    help="Filter by model name"
-)
+@click.option("--model", "-m", help="Filter by model name")
 @click.pass_context
 def stats(ctx, model):
     """Show statistics and calibration data.
@@ -345,7 +338,10 @@ def stats(ctx, model):
 
     avg_error = error_stats["avg_error"]
     error_color = "green" if avg_error < 15 else "yellow" if avg_error < 30 else "red"
-    table.add_row("Avg Error", f"[{error_color}]{format_percentage(avg_error, include_sign=False)}[/{error_color}]")
+    table.add_row(
+        "Avg Error",
+        f"[{error_color}]{format_percentage(avg_error, include_sign=False)}[/{error_color}]",
+    )
     table.add_row("Std Dev", format_percentage(error_stats["std_dev"], include_sign=False))
     table.add_row("Min Error", format_percentage(error_stats["min_error"], include_sign=False))
     table.add_row("Max Error", format_percentage(error_stats["max_error"], include_sign=False))

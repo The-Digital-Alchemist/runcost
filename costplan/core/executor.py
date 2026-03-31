@@ -2,9 +2,9 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Any
 
-from openai import OpenAI, APIError, RateLimitError, APIConnectionError
+from openai import APIConnectionError, APIError, OpenAI, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +14,11 @@ class ExecutionResult:
     """Result of LLM execution."""
 
     response_text: str
-    usage: Dict[str, int]  # Contains prompt_tokens, completion_tokens, total_tokens
+    usage: dict[str, int]  # Contains prompt_tokens, completion_tokens, total_tokens
     raw_response: Any
     model: str
     success: bool = True
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     def __repr__(self) -> str:
         if self.success:
@@ -36,9 +36,9 @@ class ProviderExecutor:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        organization: Optional[str] = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        organization: str | None = None,
         timeout: float = 60.0,
     ):
         """Initialize the provider executor.
@@ -61,8 +61,8 @@ class ProviderExecutor:
         prompt: str,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
-        **kwargs
+        max_tokens: int | None = None,
+        **kwargs,
     ) -> ExecutionResult:
         """Execute a single prompt completion.
 
@@ -82,7 +82,7 @@ class ProviderExecutor:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
                 max_tokens=max_tokens,
-                **kwargs
+                **kwargs,
             )
 
             # Extract response text
@@ -111,7 +111,7 @@ class ProviderExecutor:
                 raw_response=None,
                 model=model,
                 success=False,
-                error_message=f"Rate limit exceeded: {str(e)}",
+                error_message=f"Rate limit exceeded: {e!s}",
             )
 
         except APIConnectionError as e:
@@ -122,7 +122,7 @@ class ProviderExecutor:
                 raw_response=None,
                 model=model,
                 success=False,
-                error_message=f"Connection error: {str(e)}",
+                error_message=f"Connection error: {e!s}",
             )
 
         except APIError as e:
@@ -133,7 +133,7 @@ class ProviderExecutor:
                 raw_response=None,
                 model=model,
                 success=False,
-                error_message=f"API error: {str(e)}",
+                error_message=f"API error: {e!s}",
             )
 
         except Exception as e:
@@ -144,16 +144,16 @@ class ProviderExecutor:
                 raw_response=None,
                 model=model,
                 success=False,
-                error_message=f"Unexpected error: {str(e)}",
+                error_message=f"Unexpected error: {e!s}",
             )
 
     def execute_with_messages(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
-        **kwargs
+        max_tokens: int | None = None,
+        **kwargs,
     ) -> ExecutionResult:
         """Execute a chat completion with messages.
 
@@ -173,7 +173,7 @@ class ProviderExecutor:
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                **kwargs
+                **kwargs,
             )
 
             # Extract response text

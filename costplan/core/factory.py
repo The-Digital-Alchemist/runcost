@@ -1,16 +1,16 @@
 """Factory for creating providers by name. Core uses this; no direct OpenAI/Claude imports in callers."""
 
-from typing import Optional, Any
+from typing import Any
 
-from costplan.core.provider import BaseProvider
 from costplan.config.settings import Settings
+from costplan.core.provider import BaseProvider
 
 
 def create(
     provider_name: str,
-    settings: Optional[Settings] = None,
-    api_key: Optional[str] = None,
-    base_url: Optional[str] = None,
+    settings: Settings | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
     **kwargs: Any,
 ) -> BaseProvider:
     """Create a provider by name. Pricing and token logic stay inside the returned provider.

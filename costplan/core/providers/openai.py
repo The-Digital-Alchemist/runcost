@@ -5,13 +5,13 @@ The core never opens pricing.json or uses TokenEstimator directly.
 """
 
 import logging
-from typing import Optional, Tuple, List, Any, Dict
+from typing import Any
 
-from costplan.core.provider import BaseProvider, TokenPrediction
-from costplan.core.executor import ProviderExecutor, ExecutionResult
-from costplan.core.estimator import TokenEstimator
-from costplan.core.pricing import PricingRegistry
 from costplan.config.settings import Settings
+from costplan.core.estimator import TokenEstimator
+from costplan.core.executor import ExecutionResult, ProviderExecutor
+from costplan.core.pricing import PricingRegistry
+from costplan.core.provider import BaseProvider, TokenPrediction
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,13 @@ class OpenAIProvider(BaseProvider):
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        organization: Optional[str] = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        organization: str | None = None,
         timeout: float = 60.0,
-        pricing_registry: Optional[PricingRegistry] = None,
-        token_estimator: Optional[TokenEstimator] = None,
-        settings: Optional[Settings] = None,
+        pricing_registry: PricingRegistry | None = None,
+        token_estimator: TokenEstimator | None = None,
+        settings: Settings | None = None,
     ):
         """Initialize the OpenAI provider.
 
@@ -63,6 +63,7 @@ class OpenAIProvider(BaseProvider):
         """Lazy-init AsyncOpenAI client."""
         if self._async_client is None:
             from openai import AsyncOpenAI
+
             self._async_client = AsyncOpenAI(
                 api_key=self._api_key,
                 base_url=self._base_url,
@@ -75,7 +76,7 @@ class OpenAIProvider(BaseProvider):
         self,
         prompt: str,
         model: str,
-        output_ratio: Optional[float] = None,
+        output_ratio: float | None = None,
     ) -> TokenPrediction:
         """Input tokens from tiktoken only (no fallback). Output tokens from ratio for cost prediction."""
         input_tokens = self._estimator.estimate_tokens(prompt, model)
@@ -88,7 +89,7 @@ class OpenAIProvider(BaseProvider):
         prompt: str,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs,
     ) -> ExecutionResult:
         """Execute via OpenAI-compatible API."""
@@ -96,11 +97,11 @@ class OpenAIProvider(BaseProvider):
             prompt, model, temperature=temperature, max_tokens=max_tokens, **kwargs
         )
 
-    def get_pricing(self, model: str) -> Tuple[float, float]:
+    def get_pricing(self, model: str) -> tuple[float, float]:
         """Return (input $/1k tokens, output $/1k tokens) from internal pricing registry."""
         return self._pricing.get_model_pricing(model)
 
-    def list_models(self) -> List[str]:
+    def list_models(self) -> list[str]:
         """Return model names supported by this provider (from internal pricing)."""
         return self._pricing.list_supported_models()
 
@@ -109,7 +110,7 @@ class OpenAIProvider(BaseProvider):
         messages: list,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs,
     ) -> ExecutionResult:
         """Execute chat completion with messages."""
@@ -124,7 +125,7 @@ class OpenAIProvider(BaseProvider):
         prompt: str,
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Async execute via AsyncOpenAI."""
@@ -163,10 +164,10 @@ class OpenAIProvider(BaseProvider):
 
     async def async_execute_with_messages(
         self,
-        messages: List[Dict[str, str]],
+        messages: list[dict[str, str]],
         model: str,
         temperature: float = 1.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         **kwargs: Any,
     ) -> ExecutionResult:
         """Async execute chat completion with messages."""

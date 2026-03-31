@@ -1,7 +1,7 @@
 """Actual cost calculation from LLM execution results."""
 
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 from costplan.core.pricing import PricingRegistry
 
@@ -38,7 +38,7 @@ class ActualCostResult:
 class CostCalculator:
     """Calculates actual costs from LLM execution results."""
 
-    def __init__(self, pricing_registry: Optional[PricingRegistry] = None):
+    def __init__(self, pricing_registry: PricingRegistry | None = None):
         """Initialize the cost calculator.
 
         Args:
@@ -48,10 +48,10 @@ class CostCalculator:
 
     def calculate(
         self,
-        usage: Dict[str, Any],
+        usage: dict[str, Any],
         model: str,
-        cache_read_tokens: Optional[int] = None,
-        cache_creation_tokens: Optional[int] = None,
+        cache_read_tokens: int | None = None,
+        cache_creation_tokens: int | None = None,
     ) -> ActualCostResult:
         """Calculate actual cost from usage data.
 
@@ -73,13 +73,20 @@ class CostCalculator:
 
         if prompt_tokens is None or completion_tokens is None:
             raise ValueError(
-                "Usage dict must contain 'prompt_tokens' and 'completion_tokens'. "
-                f"Got: {usage}"
+                f"Usage dict must contain 'prompt_tokens' and 'completion_tokens'. Got: {usage}"
             )
 
         # Extract cache tokens from usage dict if not overridden
-        cr_tokens = cache_read_tokens if cache_read_tokens is not None else usage.get("cache_read_input_tokens", 0)
-        cc_tokens = cache_creation_tokens if cache_creation_tokens is not None else usage.get("cache_creation_input_tokens", 0)
+        cr_tokens = (
+            cache_read_tokens
+            if cache_read_tokens is not None
+            else usage.get("cache_read_input_tokens", 0)
+        )
+        cc_tokens = (
+            cache_creation_tokens
+            if cache_creation_tokens is not None
+            else usage.get("cache_creation_input_tokens", 0)
+        )
 
         # Get pricing (full pricing includes cache rates if available)
         full_pricing = self.pricing_registry.get_full_pricing(model)
@@ -153,11 +160,7 @@ class CostCalculator:
             cache_creation_cost=cc_cost,
         )
 
-    def calculate_error(
-        self,
-        predicted_cost: float,
-        actual_cost: float
-    ) -> float:
+    def calculate_error(self, predicted_cost: float, actual_cost: float) -> float:
         """Calculate prediction error percentage.
 
         Args:
